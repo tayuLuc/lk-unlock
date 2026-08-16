@@ -18,6 +18,7 @@ XIAOMI_PEM = "xiaomi.pem"
 
 def _atomic_write(path: Path, data: bytes) -> None:
     """Write data to path atomically (temp file + os.replace)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as f:
@@ -90,5 +91,9 @@ def get_keys(key_dir: Path) -> tuple[RSAPrivateKey, RSAPublicKey]:
         ),
     )
 
-    print("[+] New keys have been generated and saved into private.pem and public.pem")
+    print(
+        "[+] New keys have been generated and saved into private.pem and public.pem\n"
+        "[!] private.pem is stored UNENCRYPTED. Anyone with filesystem access\n"
+        "    can sign unlock tokens with it. Keep the directory private."
+    )
     return private_key, public_key

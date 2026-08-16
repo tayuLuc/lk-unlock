@@ -68,7 +68,15 @@ def apply_cert_bypass(image: LkImage, mode: CertBypassMode = CertBypassMode.OVER
 
         header_hash, image_hash = partition.compute_hashes()
         original = bytes(partition.cert2.data)
-        partition.cert2.data = build(original, header_hash, image_hash)
+        new_cert = build(original, header_hash, image_hash)
+        if len(new_cert) > partition.header.data_size:
+            print(
+                f"[-] Partition '{name}': cert2 would grow from {len(original)} to "
+                f"{len(new_cert)} bytes, exceeding its {partition.header.data_size}-byte "
+                "partition. Skipping cert bypass."
+            )
+            continue
+        partition.cert2.data = new_cert
 
         print(
             f"[+] Cert bypass applied to partition '{name}' "

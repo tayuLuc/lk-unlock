@@ -66,9 +66,18 @@ def get_token(serial: str = "") -> str:
 
 
 def unlock_device(
-    dry_run: bool = False, signature_path: Path | None = None, serial: str = ""
+    dry_run: bool = False,
+    signature_path: Path | None = None,
+    serial: str = "",
+    token: str | None = None,
 ) -> None:
-    """Perform the fastboot unlock sequence with a (pre-signed) signature."""
+    """Perform the fastboot unlock sequence with a (pre-signed) signature.
+
+    *token* is the exact token that was signed into signature.bin. If given,
+    it is used directly; otherwise it is read from the device (matching the
+    old behaviour). Passing it avoids the race where the device issues a new
+    token between signing and staging.
+    """
     if signature_path is None:
         raise FastbootError("signature.bin path required (sign the token first).")
 
@@ -80,8 +89,9 @@ def unlock_device(
     target = serial or devices[0]
     print(f"[+] Device found: {target}")
 
-    token = get_token(target)
-    print(f"[+] Token received: {token}")
+    if token is None:
+        token = get_token(target)
+    print(f"[+] Token: {token[:24]}...")
 
     if dry_run:
         print("[+] Dry run enabled. Skipping fastboot stage and fastboot oem unlock")

@@ -66,11 +66,17 @@ def main(argv: list[str] | None = None) -> int:
             sign_token(args.token, key_dir=args.key_dir)
         elif args.command == "unlock":
             signature_path = args.key_dir / "signature.bin"
+            token = None
             if not signature_path.exists() or args.dry_run:
                 token = get_token(args.serial)
                 print(f"[+] Token received: {token}")
                 sign_token(token, key_dir=args.key_dir)
-            unlock_device(dry_run=args.dry_run, signature_path=signature_path, serial=args.serial)
+            unlock_device(
+                dry_run=args.dry_run,
+                signature_path=signature_path,
+                serial=args.serial,
+                token=token,
+            )
     except LkUnlockError as exc:
         print(f"[-] {exc}")
         return 1

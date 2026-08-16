@@ -43,14 +43,28 @@ def patch_img(
     except FileNotFoundError as exc:
         raise PatchError(f"'{img_path}' file not found.") from exc
 
-    pos = data.find(old_n_bytes)
-    if pos == -1:
+    # Patch every occurrence: A/B slot images and backups embed the key
+    # multiple times (lk, lk_b, lk_main_dtb...). Patching only the first
+    # leaves the old key alive elsewhere and can cause a bootloop.
+    positions: list[int] = []
+    start = 0
+    while True:
+        pos = data.find(old_n_bytes, start)
+        if pos == -1:
+            break
+        positions.append(pos)
+        start = pos + 1
+
+    if not positions:
         raise PatchError("Xiaomi's public key modulus not found in LK image. Nothing to patch.")
 
-    print(f"[+] Original key modulus found at offset 0x{pos:X}")
+    for pos in positions:
+        print(f"[+] Original key modulus found at offset 0x{pos:X}")
 
-    patched_data = data[:pos] + new_n_bytes + data[pos + len(new_n_bytes) :]
-    print("[+] Public key patched successfully")
+    patched_data = data
+    for pos in positions:
+        patched_data = patched_data[:pos] + new_n_bytes + patched_data[pos + len(new_n_bytes) :]
+    print(f"[+] Public key patched successfully ({len(positions)} occurrence(s))")
 
     try:
         image = LkImage(patched_data)
@@ -66,6 +80,7 @@ def patch_img(
         raise PatchError(f"Failed to apply cert bypass: {exc}") from exc
 
     out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=out.parent, prefix=f".{out.name}.", suffix=".tmp")
     with open(fd, "wb") as f:
         f.write(patched_data)
