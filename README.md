@@ -1,39 +1,62 @@
 
 # lk-unlock
 
-This simple tool allows you to unlock the bootloader of Xiaomi devices with mtk socs by patching the little kernel (LK) image. It replaces Xiaomi's public key with your own and generates unlock signature locally . This is made possible by a **cert bypass vulnerability**, originally implemented in [lkpatcher](https://github.com/R0rt1z2/lkpatcher/).
+Unlock the bootloader of Xiaomi devices with MTK SoCs by patching the little
+kernel (LK) image. Replaces Xiaomi's public key with your own and generates
+the unlock signature locally — no Xiaomi server, no waiting, no account.
+Made possible by a **cert bypass vulnerability**, originally implemented in
+[lkpatcher](https://github.com/R0rt1z2/lkpatcher/).
 
-> **⚠️ WARNING:** This method is dangerous and could brick your device. Proceed only if you understand what you are doing and know how to restore the device.
+> **⚠️ WARNING:** This method is dangerous and could brick your device.
+> Proceed only if you understand what you are doing and know how to restore
+> the device. **After unlocking, do NOT install OTA updates** — they can
+> overwrite `lk` and re-lock (or brick) the device. Flash via PC only.
 
 ## How it works
 
-Xiaomi bootloader unlocking works using the asymmetric RSA algorithm. The device generates a one-time token, which is then sent to the server. The server signs the token with its private key and sends it back. The device verifies the server signature using the public key embedded in the bootloader (in the case of mtk - LK). The verification will only be successful if the device's one-time token was signed with the server's private key, and not otherwise. No one knows the Xiaomi server's private key, so previously, the unlocking process was impossible to perform offline (without vulnerabilities in the bootloader). A new vulnerability that affects all mtk devices allows to break the secure boot, making possible a modified LK to boot. This allows you to make any patches to it, the simplest of which is the replacement of the Xiaomi public key with your own, for which the private key is known, so that you can generate the unlock signature yourself.
-
+Xiaomi bootloader unlocking uses asymmetric RSA. The device generates a
+one-time token, sent to the server; the server signs it with its private key
+and sends it back; the device verifies the signature using the public key
+embedded in the bootloader (for MTK — in LK). No one knows Xiaomi's private
+key, so offline unlocking was impossible — until a vulnerability affecting
+all MTK devices broke secure boot, allowing a modified LK to run. This tool
+patches LK by swapping Xiaomi's public key for yours (for which the private
+key is known), so the unlock token can be signed locally.
 
 ## Requirements
 
-- Python 3.7+
-- `fastboot` binary in `PATH` or current directory.
-- Python dependencies:
-  ```bash
-  pip install cryptography 
-  pip install git+https://github.com/R0rt1z2/liblk
-  ```
+- Python 3.10+ (or use a prebuilt binary — see [Binaries](#binaries))
+- `fastboot` in `PATH` (Android platform-tools)
+- [uv](https://docs.astral.sh/uv/) for reproducible installs (optional for
+  prebuilt binaries)
+
+## Installation
+
+```bash
+uv sync            # installs deps + the `lk-unlock` CLI into .venv
+uv run lk-unlock --help
+```
+
+Dependencies are locked in `uv.lock`; `liblk` is **vendored** under
+`vendor/liblk/` (see `THIRD_PARTY.md`) so builds never depend on GitHub
+availability.
 
 ## Usage
 
-The tool provides three subcommands: `patch`, `sign`, and `unlock`.
+Three subcommands: `patch`, `sign`, `unlock`.
 
 ### 1. Patch the LK image
 
-First, obtain your device's `lk.img` (e.g., from a firmware or read it from the device directly in brom mode).
+Obtain your device's `lk.img` (from a firmware, or read it from the device
+directly in brom mode via MTKClient).
 
 ```bash
-python lk-unlock.py patch lk.img -o lk_patched.img
+lk-unlock patch lk.img -o lk_patched.img
 ```
 
 Options:
-- `--wrap` – use wrap mode for cert bypass (default is `override`).
+- `--wrap` — use wrap mode for cert bypass (default is `override`).
+- `-d/--key-dir` — directory for keys (default: current dir).
 
 This will:
 - Generate `private.pem` and `public.pem` if not present.
@@ -41,25 +64,27 @@ This will:
 - Apply cert bypass to all signed partitions.
 - Save the patched image to `lk_patched.img`.
 
-### 2. Flash the patched LK Image
+### 2. Flash the patched LK image
 
-You can use one of these methods:
-1.  [MTKClient](https://github.com/bkerler/mtkclient) (if your device is supported):
+One of these methods:
+
+1. [MTKClient](https://github.com/bkerler/mtkclient) (if your device is supported):
+   ```bash
+   python mtk.py r lk_a,lk_b lk_a_backup.img,lk_b_backup.img
+   python mtk.py w lk_a,lk_b lk_patched.img,lk_patched.img
+   ```
+2. Official Xiaomi BROM auth (paid service in Telegram / elsewhere).
+3. Temp root exploits (Ghostlock, etc.).
+4. UFS programmer / other hardware tool.
+
+### 3. Unlock the device
+
+Reboot into fastboot and run:
+
 ```bash
-python mtk.py r lk_a,lk_b lk_a_backup.img,lk_b_backup.img
-python mtk.py w lk_a,lk_b lk_patched.img,lk_patched.img
-```
-2. The official Xiaomi's brom auth  (provided as a paid service in Telegram and other places online)
-3. Temp root exploits (Ghostlock, etc.)
-4. UFS programmer / another hardware tool.
-5. ???
-
-### 3. Unlock the Device
-
-Once the patched LK is flashed, reboot into fastboot and run the unlock process:
-
-```bash
-python lk-unlock.py unlock
+lk-unlock unlock                # one device connected
+lk-unlock unlock -s <serial>    # specific device if several are connected
+lk-unlock unlock --dry-run      # read + sign token, skip stage/unlock
 ```
 
 This will:
@@ -68,38 +93,53 @@ This will:
 - Sign it using `private.pem`.
 - Stage and send the unlock command.
 
-Options:
-- `--dry-run` – run unlock command without staging the signature and unlocking the device.
-
-### 4. Manual Token Signing (Optional)
-
-If you want to sign a token manually:
+### 4. Manual token signing (optional)
 
 ```bash
 fastboot oem get_token
-python lk-unlock.py sign "TOKEN"
+lk-unlock sign "TOKEN"
 fastboot stage signature.bin
 fastboot oem unlock
 ```
 
-## Cert Bypass Modes
+## Cert bypass modes
 
-- **Override** (`--override`, default): Inserts a custom hash override block into the certificate (2026 vulnerability, no CVE code). 
-- **Wrap** (`--wrap`): Appends a forged certificate after the original one, causing the verifier to use the forged data (CVE-2023-20696).
+- **Override** (default): inserts a custom hash override block into the
+  certificate (2026 vulnerability, no CVE code).
+- **Wrap** (`--wrap`): appends a forged certificate after the original,
+  causing the verifier to use the forged data (CVE-2023-20696).
 
+## Binaries
+
+Prebuilt single-file binaries for Linux / macOS / Windows are attached to
+every `v*` tag release (built by GitHub Actions with PyInstaller; SHA256
+checksums included). Download, `chmod +x` (on Unix), and run — no Python
+needed.
+
+## Development
+
+```bash
+uv sync --dev
+uv run ruff check src/ tests/      # lint
+uv run ruff format --check src/ tests/   # format
+uv run pytest tests/ -v            # tests
+```
 
 ## Credits
 
 - Cert bypass code adapted from [lkpatcher](https://github.com/R0rt1z2/lkpatcher/) by R0rt1z2.
-- [Liblk](https://github.com/R0rt1z2/liblk) by R0rt1z2.
+- [liblk](https://github.com/R0rt1z2/liblk) by R0rt1z2 (vendored, see `THIRD_PARTY.md`).
 - [MTKClient](https://github.com/bkerler/mtkclient) for flashing the patched image.
--  [Xiaomi bootloader research](https://github.com/lrh2000/Xiaomi-bootloader).
+- [Xiaomi bootloader research](https://github.com/lrh2000/Xiaomi-bootloader).
 
 ## Disclaimer
 
-This tool is for educational and research purposes only. The authors are not responsible for any damage caused by the use of this tool. Always backup your device data and proceed with caution.
+This tool is for educational and research purposes only. The authors are not
+responsible for any damage caused by the use of this tool. Always back up
+your device data and proceed with caution.
 
 ## License
 
-This project is licensed under the AGPL License. The code is free and is not intended for sale, commercial use, or illegal purposes.
-```
+AGPL-3.0. The code is free and is not intended for sale, commercial use, or
+illegal purposes. Vendored `liblk` remains GPL-3.0 (compatible, see
+`THIRD_PARTY.md`).
