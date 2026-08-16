@@ -19,3 +19,10 @@ lk_patched.img
 # Vendor build artifacts
 vendor/**/build/
 vendor/**/*.egg-info/
+
+# Web build artifacts
+web/pyodide/
+web/vendor/
+web/gen/
+web/.cache/
+web/.nojekyll

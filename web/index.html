@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lk-unlock web — патчер загрузчика Xiaomi MTK</title>
+<style>
+:root{color-scheme:light dark;font-family:system-ui,sans-serif}
+body{max-width:860px;margin:2rem auto;padding:0 1rem;line-height:1.45}
+.card{border:1px solid #8884;border-radius:10px;padding:1rem 1.2rem;margin:1rem 0}
+h1{font-size:1.4rem}h2{font-size:1.05rem;margin:.2rem 0 .8rem}
+button{padding:.5rem 1rem;font:inherit;cursor:pointer;margin-right:.5rem}
+textarea{width:100%;height:7rem;font-family:monospace}
+pre#log{background:#8881;border-radius:8px;padding:.7rem;min-height:6rem;white-space:pre-wrap}
+:disabled{opacity:.5;cursor:wait}
+.warn{color:#b60}
+</style>
+</head>
+<body>
+<h1>lk-unlock <small>(Pyodide/WASM, всё выполняется в вашем браузере)</small></h1>
+<p class="warn">Ключ генерируется и живёт только в браузере. После загрузки страница не делает сетевых запросов.</p>
+
+<div class="card">
+  <h2>1. Патч lk.img</h2>
+  <input type="file" id="lkfile" accept=".img,.bin">
+  <p><button id="btnPatch" disabled>Патчить lk.img</button>
+     <button id="btnPem" disabled>Скачать private.pem</button></p>
+  <small>Скачаются lk_patched.img и private.pem (одна пара ключей на обе операции).</small>
+</div>
+
+<div class="card">
+  <h2>2. Подпись токена из <code>fastboot oem get_token</code></h2>
+  <textarea id="token" placeholder="(bootloader) token: ..."></textarea>
+  <p><button id="btnSign" disabled>Подписать → signature.bin</button></p>
+</div>
+
+<h2>Лог</h2>
+<pre id="log"></pre>
+<script src="./main.js"></script>
+</body>
+</html>
