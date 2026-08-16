@@ -1,30 +1,31 @@
-"""lk-unlock в Pyodide: патч lk.img и подпись токена БЕЗ cryptography.
+"""lk-unlock in Pyodide: patch lk.img and sign tokens WITHOUT cryptography.
 
-Исправление раунд 2 (по результатам проверки реального кода):
+Round 2 fixes (based on reviewing the real code):
 
-БЛОКЕР 1 — signer.py ИМПОРТИРУЕТ cryptography НАПРЯМУЮ:
+BLOCKER 1 - signer.py IMPORTS cryptography DIRECTLY:
     from cryptography.hazmat.primitives import serialization
-  Одного шима lk_unlock.keys недостаточно: import lk_unlock.signer падал на
-  этой строке (cryptography в Pyodide нет — это Rust/C-расширение). Теперь ДО
-  любого импорта lk_unlock.* в sys.modules подкладывается shim-цепочка
+  Shimming lk_unlock.keys alone is not enough: importing lk_unlock.signer
+  failed on this line (cryptography is not available in Pyodide - it is a
+  Rust/C extension). Now, BEFORE any lk_unlock.* import, a shim chain is
+  placed in sys.modules:
     cryptography / cryptography.hazmat / cryptography.hazmat.primitives /
     cryptography.hazmat.primitives.serialization,
-  где serialization.load_pem_private_key(*a, **k) -> _PrivateKey() (duck-type
-  из JWK). Нужны ВСЕ уровни цепочки: `from X import Y` сначала резолвит
-  родительские пакеты через sys.modules.
+  where serialization.load_pem_private_key(*a, **k) -> _PrivateKey()
+  (duck-type from JWK). ALL chain levels are required: `from X import Y`
+  resolves parent packages through sys.modules first.
 
-БЛОКЕР 2 — реальный sign_token читает ключ из ФАЙЛА:
+BLOCKER 2 - the real sign_token reads the key from a FILE:
     private_key_path = key_dir / "private.pem"
     priv = serialization.load_pem_private_key(f.read(), password=None)
-  В вебе файла не было -> FileNotFoundError. Теперь _prepare_key_dir() ПЕРЕД
-  вызовом sign_token пишет KEY_DIR/"private.pem" (через private_pem(), собранную
-  из JWK через pyasn1). Реальный sign_token читает файл, а подменённый
-  serialization.load_pem_private_key возвращает наш duck-type ключ (тот же JWK),
-  поэтому материал ключа согласован.
+  The file did not exist in the web build -> FileNotFoundError. Now
+  _prepare_key_dir() writes KEY_DIR/"private.pem" (built from the JWK via
+  pyasn1) BEFORE calling sign_token. The real sign_token reads the file, and
+  the shimmed serialization.load_pem_private_key returns our duck-type key
+  (the same JWK), so the key material stays consistent.
 
-Подпись остаётся RAW (без хэша): блок 00 01 FF..FF 00 || token строит и
-подписывает РЕАЛЬНЫЙ lk_unlock.signer (encode + pow(m,d,n)); мы его только
-вызываем. Шим лишь отдаёт ключ с .private_numbers().d и
+The signature stays RAW (no hash): block 00 01 FF..FF 00 || token is built
+and signed by the REAL lk_unlock.signer (encode + pow(m,d,n)); we only call
+it. The shim merely supplies the key with .private_numbers().d and
 .public_key().public_numbers().n.
 """
 
@@ -39,12 +40,12 @@ import types
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Состояние ключа: приватный JWK (WebCrypto в браузере или тестовый файл)
+# Key state: private JWK (WebCrypto in browser or test file)
 # ---------------------------------------------------------------------------
 _KEY: dict | None = None
-_MOD = 256  # байт модуля (RSA-2048)
-KEY_DIR = Path("/tmp/lk_keydir")  # фиктивный key_dir для реальных функций
-XIAOMI_PEM = Path("/app/lk_unlock/xiaomi.pem")  # смонтирован build.py (step_pyfiles)
+_MOD = 256  # modulus bytes (RSA-2048)
+KEY_DIR = Path("/tmp/lk_keydir")  # fake key_dir for real functions
+XIAOMI_PEM = Path("/app/lk_unlock/xiaomi.pem")  # mounted by build.py (step_pyfiles)
 
 
 def _b64u_dec(s: str) -> bytes:
@@ -58,13 +59,13 @@ def _jwk_int(s: str) -> int:
 def set_key_json(jwk_text: str) -> None:
     global _KEY, _MOD
     k = json.loads(jwk_text)
-    assert k.get("kty") == "RSA", "нужен RSA JWK"
+    assert k.get("kty") == "RSA", "RSA JWK required"
     _KEY = k
     _MOD = (_jwk_int(k["n"]).bit_length() + 7) // 8
 
 
 def _n():
-    assert _KEY is not None, "ключ не задан: сначала set_key_json(...)"
+    assert _KEY is not None, "key not set: call set_key_json(...) first"
     return _jwk_int(_KEY["n"])
 
 
@@ -97,22 +98,22 @@ def _qi():
 
 
 # ---------------------------------------------------------------------------
-# RAW RSA подпись В ТОЧНОСТИ как нативный signer.encode + pow (БЕЗ хэша):
+# RAW RSA signing exactly like native signer.encode + pow (NO hash):
 #   block = 00 01 FF*(emlen-len-3) 00 || token ; sig = pow(int(block), d, n)
-# Используется ТОЛЬКО как duck-type метод .sign (страховка); реальный signing
-# делает нативный lk_unlock.signer.
+# Used ONLY as a duck-type .sign method (fallback); real signing is done
+# by the native lk_unlock.signer.
 # ---------------------------------------------------------------------------
 def _raw_sign(msg: bytes) -> bytes:
     if len(msg) > _MOD - 3:
-        raise ValueError(f"токен слишком длинный: {len(msg)} > {_MOD - 3}")
+        raise ValueError(f"token too long: {len(msg)} > {_MOD - 3}")
     block = b"\x00\x01" + b"\xff" * (_MOD - len(msg) - 3) + b"\x00" + msg
     s = pow(int.from_bytes(block, "big"), _d(), _n())
     return s.to_bytes(_MOD, "big")
 
 
 # ---------------------------------------------------------------------------
-# Duck-type под cryptography.RSAPrivateKey / RSAPublicKey — покрываем ВСЕ
-# способы, которыми signer/patcher могут достать d и n.
+# Duck-type for cryptography.RSAPrivateKey / RSAPublicKey — covers ALL
+# ways signer/patcher can obtain d and n.
 # ---------------------------------------------------------------------------
 class _PublicNumbers:
     def __init__(self, e, n):
@@ -148,7 +149,7 @@ class _PrivateKey:
     def private_numbers(self):  # signer: priv.private_numbers().d
         return _PrivateNumbers(_d(), _p(), _q(), _dp(), _dq(), _qi(), _PublicNumbers(_e(), _n()))
 
-    def sign(self, data, padding, algorithm):  # нативный формат: RAW без хэша
+    def sign(self, data, padding, algorithm):  # native format: RAW without hash
         return _raw_sign(data)
 
     @property
@@ -157,7 +158,7 @@ class _PrivateKey:
 
 
 # ---------------------------------------------------------------------------
-# Разбор xiaomi.pem (без cryptography) -> публичный ключ Xiaomi
+# Parse xiaomi.pem (no cryptography) -> Xiaomi public key
 # ---------------------------------------------------------------------------
 _XIAOMI_PUB_CACHE = None
 
@@ -168,7 +169,7 @@ def _parse_rsa_public_pem(pem_text: str):
 
     m = re.search(r"-----BEGIN ([A-Z0-9 ]+)-----([\s\S]*?)-----END \1-----", pem_text)
     if not m:
-        raise ValueError("в xiaomi.pem не найден PEM-блок")
+        raise ValueError("no PEM block found in xiaomi.pem")
     label = m.group(1).strip().upper()
     der = base64.b64decode("".join(m.group(2).split()))
 
@@ -201,7 +202,7 @@ def _parse_rsa_public_pem(pem_text: str):
         rk, _ = der_dec.decode(inner, asn1Spec=RSAPublicKey())
         return int(rk["modulus"]), int(rk["publicExponent"])
 
-    raise ValueError(f"неизвестный формат xiaomi.pem: {label!r}")
+    raise ValueError(f"unknown xiaomi.pem format: {label!r}")
 
 
 def _load_xiaomi_pub():
@@ -211,8 +212,8 @@ def _load_xiaomi_pub():
             text = XIAOMI_PEM.read_text()
         except FileNotFoundError:
             raise FileNotFoundError(
-                f"{XIAOMI_PEM} не найден: build.py должен монтировать *.pem "
-                "из src/lk_unlock в /app/lk_unlock (step_pyfiles)."
+                f"{XIAOMI_PEM} not found: build.py must mount *.pem "
+                "from src/lk_unlock into /app/lk_unlock (step_pyfiles)."
             ) from None
         n, e = _parse_rsa_public_pem(text)
         _XIAOMI_PUB_CACHE = _PublicKey(e, n)
@@ -220,7 +221,7 @@ def _load_xiaomi_pub():
 
 
 # ---------------------------------------------------------------------------
-# Экспорт private.pem (PKCS#1 RSAPrivateKey) через pyasn1
+# Export private.pem (PKCS#1 RSAPrivateKey) via pyasn1
 # ---------------------------------------------------------------------------
 def private_pem() -> str:
     from pyasn1.codec.der.encoder import encode
@@ -250,7 +251,7 @@ def private_pem() -> str:
 
 
 # ---------------------------------------------------------------------------
-# SHIM 1: lk_unlock.keys — ставится ДО импорта patcher/signer
+# SHIM 1: lk_unlock.keys — installed BEFORE importing patcher/signer
 # ---------------------------------------------------------------------------
 def _shim_get_keys(key_dir=None):
     priv = _PrivateKey()
@@ -270,7 +271,7 @@ def _install_keys_shim():
     shim.load_private_key = lambda *a, **k: _PrivateKey()
     shim.export_pem = lambda key=None: private_pem()
 
-    def _fallback(attr):  # страховка от неизвестных имён
+    def _fallback(attr):  # fallback for unknown names
         return lambda *a, **k: _PrivateKey()
 
     shim.__getattr__ = _fallback
@@ -278,10 +279,10 @@ def _install_keys_shim():
 
 
 # ---------------------------------------------------------------------------
-# SHIM 2 (БЛОКЕР 1): cryptography.hazmat.primitives.serialization
-# signer.py делает `from cryptography.hazmat.primitives import serialization`,
-# поэтому нужны ВСЕ уровни цепочки в sys.modules + атрибутная цепочка,
-# иначе импорт упадёт ещё на родительском пакете.
+# SHIM 2 (BLOCKER 1): cryptography.hazmat.primitives.serialization
+# signer.py does `from cryptography.hazmat.primitives import serialization`,
+# so ALL chain levels must exist in sys.modules + attribute chain,
+# otherwise the import fails on the parent package.
 # ---------------------------------------------------------------------------
 def _install_cryptography_shim():
     ser = "cryptography.hazmat.primitives.serialization"
@@ -290,7 +291,7 @@ def _install_cryptography_shim():
 
     def _mk(name):
         m = types.ModuleType(name)
-        m.__path__ = []  # ведём себя как пакет
+        m.__path__ = []  # behave as a package
         return m
 
     crypto = _mk("cryptography")
@@ -309,7 +310,7 @@ def _install_cryptography_shim():
     serialization.load_pem_public_key = _load_public
     serialization.load_der_public_key = _load_public
 
-    def _ser_fallback(attr):  # Encoding/PrivateFormat/... — заглушки
+    def _ser_fallback(attr):  # Encoding/PrivateFormat/... — stubs
         return lambda *a, **k: _PrivateKey()
 
     serialization.__getattr__ = _ser_fallback
@@ -324,20 +325,20 @@ def _install_cryptography_shim():
     sys.modules[ser] = serialization
 
 
-# --- Устанавливаем ОБА шима ДО первого импорта lk_unlock.* -----------------
+# --- Install BOTH shims BEFORE the first lk_unlock.* import -----------------
 _install_keys_shim()
 _install_cryptography_shim()
 
-import lk_unlock.patcher as _patcher  # noqa: E402  (cryptography уже не нужен)
-import lk_unlock.signer as _signer  # noqa: E402  (serialization подменён)
+import lk_unlock.patcher as _patcher  # noqa: E402  (cryptography no longer needed)
+import lk_unlock.signer as _signer  # noqa: E402  (serialization shimmed)
 
 
 # ---------------------------------------------------------------------------
-# Веб-вход (вызывается из worker.js)
+# Web entry point (called from worker.js)
 # ---------------------------------------------------------------------------
 def _prepare_key_dir() -> Path:
-    """БЛОКЕР 2: реальный sign_token читает key_dir/"private.pem". Пишем его
-    из JWK (через pyasn1) ДО вызова нативных функций."""
+    """BLOCKER 2: the real sign_token reads key_dir/"private.pem". Write it
+    from the JWK (via pyasn1) BEFORE calling the native functions."""
     KEY_DIR.mkdir(parents=True, exist_ok=True)
     (KEY_DIR / "private.pem").write_text(private_pem())
     return KEY_DIR
@@ -348,7 +349,7 @@ def patch_file(path_in: str, use_wrap: bool = False) -> str:
     out_path = "/tmp/lk_patched.img"
     result = _patcher.patch_img(path_in, out_path, use_wrap, key_dir)
     data = Path(result).read_bytes()
-    Path(out_path).write_bytes(data)  # worker.js читает именно этот путь
+    Path(out_path).write_bytes(data)  # worker.js reads exactly this path
     return json.dumps(
         {
             "sha256": hashlib.sha256(data).hexdigest(),
@@ -376,7 +377,7 @@ def normalize_token(text: str) -> bytes:
 
 
 def sign_token(text: str) -> str:
-    key_dir = _prepare_key_dir()  # пишет private.pem (БЛОКЕР 2)
+    key_dir = _prepare_key_dir()  # writes private.pem (BLOCKER 2)
     token = normalize_token(text)
     result = _signer.sign_token(token, key_dir)
     sig = Path(result).read_bytes()

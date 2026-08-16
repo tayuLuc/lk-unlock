@@ -1,16 +1,14 @@
-"""Parity: результат lk-unlock в Pyodide (WASM) == нативному Python (по sha256).
+"""Parity test: lk-unlock in Pyodide (WASM) must match native Python output.
 
-Запуск: uv run pytest tests/web/test_web_parity.py -v
-Нужно: uv run playwright install chromium; uv run python web/build.py
-
-Исправлено: эталон считается РЕАЛЬНЫМИ функциями пакета (patch_img/sign_token),
-подпись RAW без хэша — как в signer.py.
+Run: uv run pytest tests/web/test_web_parity.py -v
+Requires: uv run playwright install chromium; uv run python web/build.py
 """
 
 import base64
 import hashlib
 import http.server
 import json
+import textwrap
 import threading
 from pathlib import Path
 
@@ -23,10 +21,9 @@ LK_IMG = ROOT / "tests/files/lk.img"
 TEST_KEY_JWK = ROOT / "tests/files/test_key.jwk"
 TEST_KEY_PEM = ROOT / "tests/files/test_key.pem"
 
-# TODO(интеграция): подставьте значение по умолчанию вашего CLI для use_wrap
 USE_WRAP = False
 
-# Токен 64 байта (< 253, иначе raw-блок не влезет в 256 байт модуля).
+# 64-byte token (< 253 so the raw block fits in the 256-byte modulus).
 TOKEN_BYTES = bytes.fromhex("ab" * 64)
 TOKEN_TEXT = "(bootloader) " + TOKEN_BYTES.hex()
 
@@ -36,7 +33,7 @@ def sha(b):
 
 
 def native_reference(tmp_path) -> dict:
-    """Эталон: тот же lk.img и тот же ключ, но РЕАЛЬНЫЙ нативный код."""
+    """Reference: same lk.img and key, but real native package functions."""
     from cryptography.hazmat.primitives import serialization
 
     import lk_unlock.keys as K
@@ -48,7 +45,6 @@ def native_reference(tmp_path) -> dict:
 
     key_dir = tmp_path / "keydir"
     key_dir.mkdir()
-    # страховка, если код читает ключ из файла помимо get_keys/load_private_key
     (key_dir / "private.pem").write_bytes(TEST_KEY_PEM.read_bytes())
 
     def fake_get_keys(key_dir=None):
@@ -93,11 +89,22 @@ def server():
     srv.shutdown()
 
 
+PATCH_JS = textwrap.dedent(
+    """
+    async ({img, jwk}) => {
+        const buf = Uint8Array.from(atob(img), c => c.charCodeAt(0)).buffer;
+        const r = await window.lkUnlock.patchBuffer(buf, jwk);
+        return {sha: r.sha256, pem: r.pem};
+    }
+    """
+)
+
+
 def test_wasm_equals_native(server, tmp_path):
-    assert (WEB / "pyodide/pyodide.js").exists(), "сначала: uv run python web/build.py"
-    assert LK_IMG.exists(), "нужен tests/files/lk.img"
+    assert (WEB / "pyodide/pyodide.js").exists(), "run: uv run python web/build.py"
+    assert LK_IMG.exists(), "missing tests/files/lk.img"
     assert TEST_KEY_JWK.exists() and TEST_KEY_PEM.exists(), (
-        "нужны tests/files/test_key.{jwk,pem} (scripts/make_test_key.py)"
+        "missing tests/files/test_key.{jwk,pem} (scripts/make_test_key.py)"
     )
 
     exp = native_reference(tmp_path)
@@ -113,29 +120,21 @@ def test_wasm_equals_native(server, tmp_path):
         page.goto(server + "/index.html")
         page.wait_for_function("window.lkUnlock && window.lkUnlock.ready()", timeout=180_000)
 
-        # 1) патч через WASM фиксированным ключом
-        #    (ВАЖНО: выполняется ДО sign, чтобы зафиксировать тестовый ключ)
-        r = page.evaluate(
-            """async ({img, jwk}) => {
-            const buf = Uint8Array.from(atob(img), c => c.charCodeAt(0)).buffer;
-            const r = await window.lkUnlock.patchBuffer(buf, jwk);
-            return {sha: r.sha256, pem: r.pem};
-        }""",
-            {"img": img_b64, "jwk": jwk},
-        )
-        assert r["sha"] == exp["patched"], "lk_patched.img: WASM != нативный Python"
+        # Patch via WASM with a fixed key. Runs before sign so the test key sticks.
+        r = page.evaluate(PATCH_JS, {"img": img_b64, "jwk": jwk})
+        assert r["sha"] == exp["patched"], "lk_patched.img: WASM != native Python"
         assert r["pem"].startswith("-----BEGIN RSA PRIVATE KEY-----")
 
-        # 2) подпись токена через WASM тем же ключом (RAW, без хэша)
+        # Sign the token via WASM with the same key (raw, no hash).
         s = page.evaluate("t => window.lkUnlock.signToken(t)", TOKEN_TEXT)
-        assert s["sha256"] == exp["sig"], "signature.bin: WASM != нативный Python"
+        assert s["sha256"] == exp["sig"], "signature.bin: WASM != native Python"
 
-        # 3) прогон через реальный UI (скачивание lk_patched.img)
+        # Drive the real UI (download lk_patched.img).
         with page.expect_download() as dl:
             page.set_input_files("#lkfile", str(LK_IMG))
             page.click("#btnPatch")
         assert dl.value.suggested_filename == "lk_patched.img"
         assert sha(Path(dl.value.path()).read_bytes()) == exp["patched"]
 
-        assert not errors, f"ошибки страницы: {errors}"
+        assert not errors, f"page errors: {errors}"
         browser.close()

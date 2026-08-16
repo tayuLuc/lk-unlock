@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Одноразово: фиксированный тестовый RSA-2048 ключ для parity-теста.
-Запуск: uv run python scripts/make_test_key.py → tests/files/test_key.{jwk,pem}
+"""One-off: fixed test RSA-2048 key for the parity test.
+Run: uv run python scripts/make_test_key.py -> tests/files/test_key.{jwk,pem}
 """
 
 import base64
@@ -41,4 +41,4 @@ jwk = {
         serialization.NoEncryption(),
     )
 )
-print("записано:", out / "test_key.jwk", out / "test_key.pem")
+print("written:", out / "test_key.jwk", out / "test_key.pem")

@@ -32,7 +32,11 @@ dev = ["pytest>=8.0", "ruff>=0.6"]
 lk-unlock = "lk_unlock.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.6"]
+dev = [
+    "playwright>=1.62.0",
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
 
 [tool.uv.sources]
 # liblk is not on PyPI and upstream only ships it via git. Vendored under
