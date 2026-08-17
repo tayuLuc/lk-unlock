@@ -8,6 +8,7 @@ see THIRD_PARTY.md. Each patch is a needle->replacement hex pair;
 
 from __future__ import annotations
 
+from liblk.exceptions import NeedleNotFoundException
 from liblk.image import LkImage
 
 # Category -> {needle_hex: replacement_hex}
@@ -49,7 +50,7 @@ def apply_patch_category(
         try:
             image.apply_patch(needle, replacement, partition="lk")
             applied += 1
-        except Exception:
+        except NeedleNotFoundException:
             continue  # needle not present in this image - skip
     return applied
 

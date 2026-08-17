@@ -29,12 +29,20 @@ def _list_partitions(img: str) -> None:
 def _dump_partition(img: str, name: str, output: str | None) -> None:
     from liblk.image import LkImage
 
+    if any(c in name for c in "/\\"):
+        raise LkUnlockError(f"invalid partition name: {name!r}")
     image = LkImage(img)
     if name not in image.partitions:
         raise LkUnlockError(f"partition '{name}' not found in {img}")
     out = Path(output) if output else Path(img).with_name(f"{name}.bin")
+    _check_output_path(img, out)
     out.write_bytes(image.partitions[name].data)
     print(f"[+] Dumped '{name}' ({len(image.partitions[name].data)} bytes) to {out}")
+
+
+def _check_output_path(img: str, out: Path) -> None:
+    if out.resolve() == Path(img).resolve():
+        raise LkUnlockError("output path cannot be the same as the input image")
 
 
 def _patch_and_save(
@@ -51,8 +59,28 @@ def _patch_and_save(
     out = Path(output) if output else Path(img).with_name(
         f"{Path(img).stem}_patched{Path(img).suffix}"
     )
+    _check_output_path(img, out)
     image.save(str(out))
     print(f"[+] All done! Saved to: {out}")
+
+
+def _validate_custom_patches(data) -> dict[str, dict[str, str]]:
+    """Validate patch-custom JSON: {category: {needle_hex: replacement_hex}}."""
+    if not isinstance(data, dict) or not data:
+        raise LkUnlockError("custom patches must be a non-empty JSON object")
+    result: dict[str, dict[str, str]] = {}
+    for cat, recipes in data.items():
+        if not isinstance(cat, str) or not isinstance(recipes, dict) or not recipes:
+            raise LkUnlockError(f"category '{cat}' must map to a non-empty object")
+        clean: dict[str, str] = {}
+        for needle, replacement in recipes.items():
+            if not all(isinstance(v, str) for v in (needle, replacement)):
+                raise LkUnlockError(f"category '{cat}': needle/replacement must be hex strings")
+            if len(needle) % 2 or len(replacement) % 2:
+                raise LkUnlockError(f"category '{cat}': hex strings must have even length")
+            clean[needle] = replacement
+        result[cat] = clean
+    return result
 
 
 def _show_info(img: str) -> None:
@@ -166,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
             _patch_and_save(args.img, args.output, list(DEFAULT_PATCHES))
         elif args.command == "patch-custom":
             with Path(args.patches_json).open() as f:
-                custom = json.load(f)
+                custom = _validate_custom_patches(json.load(f))
             _patch_and_save(args.img, args.output, list(custom), custom)
         elif args.command == "sign":
             sign_token(args.token, key_dir=args.key_dir)

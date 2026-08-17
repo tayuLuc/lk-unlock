@@ -147,3 +147,30 @@ def test_apply_patch_categories(tmp_path):
 
     # Default patches may or may not apply to this image - must not crash.
     _patch_and_save(str(TEST_LK), str(tmp_path / "all.img"), list(DEFAULT_PATCHES))
+
+
+def test_validate_custom_patches_rejects_bad_json():
+    from lk_unlock.cli import _validate_custom_patches
+    from lk_unlock.errors import LkUnlockError
+
+    with pytest.raises(LkUnlockError):
+        _validate_custom_patches([])  # not a dict
+    with pytest.raises(LkUnlockError):
+        _validate_custom_patches({"cat": {}})  # empty category
+    with pytest.raises(LkUnlockError):
+        _validate_custom_patches({"cat": {"abc": "00207047"}})  # odd-length hex
+    with pytest.raises(LkUnlockError):
+        _validate_custom_patches({"cat": {1: "00207047"}})  # non-str needle
+
+    ok = _validate_custom_patches({"cat": {"aabb": "0020"}})
+    assert ok == {"cat": {"aabb": "0020"}}
+
+
+def test_patch_and_save_rejects_same_output(tmp_path):
+    from lk_unlock.cli import _patch_and_save
+    from lk_unlock.errors import LkUnlockError
+
+    if not TEST_LK.exists():
+        pytest.skip("test lk.img not present")
+    with pytest.raises(LkUnlockError):
+        _patch_and_save(str(TEST_LK), str(TEST_LK), ["fastboot"])
