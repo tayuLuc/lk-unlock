@@ -23,3 +23,21 @@ reproducible builds (including PyInstaller binary builds on CI).
 2. Replace the contents of `vendor/liblk/` (keep `LICENSE`).
 3. Update the commit hash and date above.
 4. Run `uv lock --refresh` and re-run the test suite.
+
+## lkpatcher (binary patch recipes)
+
+- **Upstream:** https://github.com/r0rt1z2/lkpatcher
+- **License:** GPL-3.0-or-later
+- **Used in:** `src/lk_unlock/patches.py` (DEFAULT_PATCHES)
+
+### What was taken
+
+The binary patch recipes (needle -> replacement hex pairs) for the
+`fastboot`, `dm_verity`, `orange_state` and `red_state` categories,
+as of lkpatcher 4.2.0 (2026-06-30). Only the constant data was ported;
+the patching logic is our own (`apply_patch_categories`) built on liblk.
+
+### Updating
+
+Pull the latest `DEFAULT_PATCHES` from upstream's `lkpatcher/patcher.py`
+and update this file with the new upstream revision.

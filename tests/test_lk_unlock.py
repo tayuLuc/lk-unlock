@@ -14,6 +14,7 @@ from lk_unlock.cert import (
     build_bypass_cert2_override,
     build_bypass_cert2_wrap,
 )
+from lk_unlock.errors import LkUnlockError
 from lk_unlock.signer import encode
 
 FILES = Path(__file__).parent / "files"
@@ -110,3 +111,39 @@ def test_real_lk_matches_cert2():
     for name, p in img.partitions.items():
         if p.cert2 is not None:
             assert p.matches_cert2() is True, f"{name} should match its cert2"
+
+
+@pytest.mark.skipif(not TEST_LK.exists(), reason="test lk.img not present")
+def test_list_and_dump_partitions(tmp_path):
+    from lk_unlock.cli import _dump_partition, _list_partitions
+
+    _list_partitions(str(TEST_LK))  # smoke test - must not raise
+
+    out = tmp_path / "lk_dump.bin"
+    _dump_partition(str(TEST_LK), "lk", str(out))
+    assert out.exists()
+    assert len(out.read_bytes()) == len(LkImage(TEST_LK).partitions["lk"].data)
+
+    with pytest.raises(LkUnlockError):
+        _dump_partition(str(TEST_LK), "nonexistent", str(tmp_path / "x.bin"))
+
+
+@pytest.mark.skipif(not TEST_LK.exists(), reason="test lk.img not present")
+def test_apply_patch_categories(tmp_path):
+    from lk_unlock.cli import _patch_and_save
+    from lk_unlock.patches import DEFAULT_PATCHES
+
+    # Patch with a guaranteed-present needle from the lk partition body.
+    lk = LkImage(TEST_LK).partitions["lk"].data
+    needle = lk[0x100:0x104].hex()
+    custom = {"test_cat": {needle: "deadbeef"}}
+
+    out = tmp_path / "patched.img"
+    _patch_and_save(str(TEST_LK), str(out), ["test_cat"], custom)
+    assert out.exists()
+
+    patched_lk = LkImage(out).partitions["lk"].data
+    assert patched_lk[0x100:0x104].hex() == "deadbeef"
+
+    # Default patches may or may not apply to this image - must not crash.
+    _patch_and_save(str(TEST_LK), str(tmp_path / "all.img"), list(DEFAULT_PATCHES))
