@@ -23,6 +23,7 @@ DEFAULT_PATCHES: dict[str, dict[str, str]] = {
     # by forcing the function that checks the vbmeta state to return 0
     "dm_verity": {
         "30b583b002ab0022": "00207047",
+        "022800d0704738b53224e0f7": "00207047",
     },
     # Disable the unlocked-warning by forcing the function that checks the
     # current LCS state to always return 0
@@ -34,6 +35,12 @@ DEFAULT_PATCHES: dict[str, dict[str, str]] = {
     # return immediately
     "red_state": {
         "f0b5002489b0": "00207047",
+    },
+    # Force img_auth_stor (image auth on boot) to return 0 - disables
+    # verification of subsequent partitions (logo, etc.). From lkpatcher
+    # issue #14 (Xiaomi Note 10 Pro).
+    "img_auth_stor": {
+        "2de9f0470f469046": "00207047",
     },
 }
 

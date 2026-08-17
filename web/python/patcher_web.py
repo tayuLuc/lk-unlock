@@ -373,7 +373,16 @@ def parse_token(token_text: str) -> str:
     and extract the device name by scanning the decoded bytes - robust to
     the exact TLV layout, which varies across builds. Works on bytes only.
     """
-    result = {"valid": False, "error": None, "device_name": None, "raw_length": 0}
+    result = {
+        "valid": False,
+        "error": None,
+        "device_name": None,
+        "device_name_offset": None,
+        "device_name_length": 0,
+        "prefix_offset": 0,
+        "prefix_ok": False,
+        "raw_length": 0,
+    }
     cleaned = (token_text or "").strip().replace(" ", "")
     if not cleaned:
         result["error"] = "Пустой токен"
@@ -393,19 +402,34 @@ def parse_token(token_text: str) -> str:
     if data[0] != 0x55:
         result["error"] = f"Неверный префикс 0x{data[0]:02x} (ожидался 0x55)"
         return json.dumps(result)
-    # Extract device codename: printable ASCII run of >=4 chars
+    result["prefix_ok"] = True
+    result["prefix_offset"] = 0
+    # Extract device codename: first printable ASCII run of >=4 chars.
     best = ""
+    best_start = -1
+    best_len = 0
     cur = []
-    for b in data[1:]:
+    cur_start = -1
+    for idx, b in enumerate(data[1:], start=1):
         if 32 <= b < 127:
+            if not cur:
+                cur_start = idx
             cur.append(chr(b))
         else:
             if len(cur) >= 4:
                 best = "".join(cur)
+                best_start = cur_start
+                best_len = len(cur)
+                break  # first device-name run wins
             cur = []
-    if len(cur) >= 4:
+            cur_start = -1
+    if not best and len(cur) >= 4:
         best = "".join(cur)
+        best_start = cur_start
+        best_len = len(cur)
     result["device_name"] = best or None
+    result["device_name_offset"] = best_start if best else None
+    result["device_name_length"] = best_len if best else 0
     result["valid"] = True
     return json.dumps(result)
 
