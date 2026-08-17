@@ -37,6 +37,17 @@ The binary patch recipes (needle -> replacement hex pairs) for the
 as of lkpatcher 4.2.0 (2026-06-30). Only the constant data was ported;
 the patching logic is our own (`apply_patch_categories`) built on liblk.
 
+### Additional needles (from lkpatcher issues, not in upstream DEFAULT_PATCHES)
+
+- `dm_verity` second needle `022800d0704738b53224e0f7` — from lkpatcher
+  issue #4 (Realme C25, dm-verity message not fully disabled).
+- `img_auth_stor` needle `2de9f0470f469046` — disables verification of
+  subsequent partitions (logo etc.); suggested by lkpatcher author in
+  issue #14 (Xiaomi Note 10 Pro).
+
+These are community-reported and may not match every image; they are
+best-effort additions beyond the upstream defaults.
+
 ### Updating
 
 Pull the latest `DEFAULT_PATCHES` from upstream's `lkpatcher/patcher.py`

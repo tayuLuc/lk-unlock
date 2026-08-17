@@ -433,6 +433,7 @@ function saveBlob(data,name){
 const els={
   patch:$('#btnPatch'),
   dlImg:$('#dlImg'),
+  lkfile:$('#lkfile'),
   sign:$('#btnSign'),
   token:$('#token'),
   drop:$('#drop'),
@@ -527,10 +528,16 @@ function analyzeToken(){
   window.lkUnlock.parseToken(val).then(r=>{
     const err = r.error;
     const okB = !err;
-    // Single, human-readable message instead of three identical ✗.
+    // On error show a single clear message in the Base64 row only;
+    // the other rows stay neutral (not triplicated).
     setCheck('#tokenBase64',okB, okB?'Base64 ✓':(err||'Base64'));
-    setCheck('#tokenPrefix',okB, okB?'0x55 ✓':(err||'0x55'));
-    setCheck('#tokenDevice',okB&&!!r.device_name, r.device_name||'—');
+    if(okB){
+      setCheck('#tokenPrefix',true,'0x55 ✓');
+      setCheck('#tokenDevice',!!r.device_name, r.device_name||'—');
+    }else{
+      setCheck('#tokenPrefix',false,'—');
+      setCheck('#tokenDevice',false,'—');
+    }
     els.sign.disabled=!okB;
   }).catch(()=>{
     setCheck('#tokenBase64',false,'Ошибка анализа');
