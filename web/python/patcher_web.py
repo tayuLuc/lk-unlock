@@ -319,13 +319,19 @@ def get_jwk() -> str:
     return json.dumps(_KEY)
 
 
-def diagnose_file(data: bytes) -> str:
+def diagnose_file(data) -> str:
     """Pre-patch diagnostics: magic bytes, size, OEM key presence.
 
     Runs read-only checks on the uploaded image so the UI can block a
     patch that would brick the device (wrong format, already-patched,
     foreign model). Returns a JSON summary.
     """
+    # data may arrive as bytes or a JsProxy/Uint8Array; normalize to bytes.
+    if not isinstance(data, bytes):
+        try:
+            data = data.to_bytes() if hasattr(data, "to_bytes") else bytes(data)
+        except Exception:
+            data = bytes(memoryview(data))
     result = {
         "size": len(data),
         "magic_ok": False,
