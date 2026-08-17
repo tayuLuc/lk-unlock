@@ -260,7 +260,7 @@ let seq=0;const pending=new Map();
 function rpc(method,data={},transfer=[]){
   return new Promise((resolve,reject)=>{
     const id=++seq;pending.set(id,{resolve,reject});
-    worker.postMessage({id,method,...data},transfer);
+    worker.postMessage({type:method,id,...data},transfer);
   });
 }
 worker.onmessage=e=>{
@@ -269,7 +269,7 @@ worker.onmessage=e=>{
   if(typeof d.progress==='number')setSplash(d.progress<=1?d.progress*100:d.progress);
   if(!d.id)return;
   const p=pending.get(d.id);if(!p)return;pending.delete(d.id);
-  d.error?p.reject(new Error(d.error)):p.resolve(d.result!==undefined?d.result:d);
+  d.type==='error'?p.reject(new Error(d.message||'worker error')):p.resolve(d.result!==undefined?d.result:d);
 };
 worker.onerror=e=>log('worker: '+e.message);
 
@@ -280,7 +280,7 @@ window.lkUnlock={
   init:jwk=>rpc('init',{jwk}),
   patchBuffer:(buf,jwk)=>(jwk?window.lkUnlock.init(jwk):Promise.resolve())
       .then(()=>rpc('patch',{buf},[buf])),
-  signToken:text=>rpc('sign',{text}),
+  signToken:text=>rpc('sign',{token:text}),
 };
 
 /* ================= утилита сохранения ================= */

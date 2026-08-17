@@ -23,6 +23,10 @@ jobs:
         run: uv run ruff check src/ tests/
       - name: Format check
         run: uv run ruff format --check src/ tests/
+      - name: Build web bundle (for parity test)
+        run: uv run python web/build.py
+      - name: Install Playwright chromium
+        run: uv run playwright install chromium
       - name: Test
         run: uv run pytest tests/ -v
 
