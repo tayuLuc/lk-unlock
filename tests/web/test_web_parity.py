@@ -129,10 +129,13 @@ def test_wasm_equals_native(server, tmp_path):
         s = page.evaluate("t => window.lkUnlock.signToken(t)", TOKEN_TEXT)
         assert s["sha256"] == exp["sig"], "signature.bin: WASM != native Python"
 
-        # Drive the real UI (download lk_patched.img).
+        # Drive the real UI: patch, then click the download link (user gesture).
+        page.set_input_files("#lkfile", str(LK_IMG))
+        page.wait_for_selector("#btnPatch:not([disabled])", timeout=30000)
+        page.click("#btnPatch")
+        page.wait_for_selector("#dlImg", state="visible", timeout=30000)
         with page.expect_download() as dl:
-            page.set_input_files("#lkfile", str(LK_IMG))
-            page.click("#btnPatch")
+            page.click("#dlImg")
         assert dl.value.suggested_filename == "lk_patched.img"
         assert sha(Path(dl.value.path()).read_bytes()) == exp["patched"]
 

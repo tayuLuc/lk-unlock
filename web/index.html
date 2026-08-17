@@ -89,6 +89,17 @@ h1{margin:0 0 14px;font-size:clamp(30px,5vw,52px);font-weight:750;letter-spacing
   background:rgba(124,92,255,.07);box-shadow:inset 0 0 40px rgba(124,92,255,.06)}
 .drop.drag svg,.drop:hover svg{transform:translateY(-3px);stroke:var(--acc2)}
 .drop.has{border-style:solid;border-color:rgba(34,208,122,.4)}
+.drop.err{border-style:solid;border-color:#ef4444;background:rgba(239,68,68,.05)}
+.drop-error{font:12.5px var(--sans);color:#ef4444;margin-top:8px;text-align:center}
+.drop-loaded{width:100%}
+.file-card{display:flex;gap:10px;align-items:center;width:100%}
+.file-card-icon{font-size:22px}
+.file-card-body{flex:1;min-width:0;text-align:left}
+.file-card-name{font:13px var(--sans);color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-card-meta{font:11px var(--mono);color:var(--muted)}
+.file-card-actions{display:flex;gap:6px;align-items:center}
+.icon-btn{background:transparent;border:0;color:var(--muted);font-size:16px;cursor:pointer;padding:4px 6px;border-radius:6px}
+.icon-btn:hover{color:#ef4444;background:rgba(239,68,68,.1)}
 .meta{display:flex;justify-content:space-between;gap:10px;font:12px var(--mono);
   color:var(--muted);margin:12px 2px 14px}
 .meta b{color:var(--text);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -228,19 +239,35 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
       <div class="c-head"><span class="num">01</span><h2>Патч lk.img</h2><span class="c-tag">bootloader</span></div>
       <p class="c-desc">Загрузите образ — на выходе получите пропатченный lk_patched.img и приватный ключ private.pem.</p>
       <label class="drop" id="drop" for="lkfile">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 16V4m0 0 4 4m-4-4L8 8M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>
-        </svg>
-        <b>Перетащите lk.img сюда</b>
-        <span>или нажмите для выбора файла</span>
+        <div class="drop-empty">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 16V4m0 0 4 4m-4-4L8 8M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>
+          </svg>
+          <b>Перетащите lk.img сюда</b>
+          <span>или нажмите для выбора .img / .bin</span>
+        </div>
+        <div class="drop-loaded" id="dropLoaded" style="display:none">
+          <div class="file-card">
+            <div class="file-card-icon">📄</div>
+            <div class="file-card-body">
+              <div class="file-card-name" id="fileCardName"></div>
+              <div class="file-card-meta" id="fileCardMeta"></div>
+            </div>
+            <div class="file-card-actions">
+              <button type="button" class="btn ghost mini" id="btnReplace" onclick="els.lkfile.click()">Заменить</button>
+              <button type="button" class="icon-btn" id="btnRemove" aria-label="Убрать файл">✕</button>
+            </div>
+          </div>
+        </div>
+        <div class="drop-error" id="dropError" role="alert" style="display:none"></div>
       </label>
-      <input type="file" id="lkfile" accept=".img,.bin,application/octet-stream" hidden>
-      <div class="meta" id="fileMeta"><span>Файл не выбран</span><span></span></div>
+      <input type="file" id="lkfile" accept=".img,.bin" hidden>
+      <div class="meta" id="fileMeta" style="display:none"></div>
 
       <!-- Key management: import / export / status -->
       <div class="row" style="margin-bottom:0">
-        <button id="btnImport" class="btn ghost" style="flex:1" disabled>Загрузить ключ (private.pem)</button>
-        <button id="btnExport" class="btn ghost" style="flex:1" disabled>Сохранить ключ (private.pem)</button>
+        <button id="btnImport" class="btn ghost" style="flex:1" disabled title="Ожидается private.pem">Загрузить ключ</button>
+        <button id="btnExport" class="btn ghost" style="flex:1" disabled title="Скачивается private.pem">Сохранить ключ</button>
       </div>
       <input type="file" id="pemfile" accept=".pem,application/x-pem-file,text/plain" hidden>
       <div class="key-badge" id="keyStatus">
@@ -255,7 +282,9 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
 
       <div class="row">
         <button id="btnPatch" class="btn primary" disabled>Патчить → lk_patched.img</button>
-        <button id="btnPem" class="btn ghost" disabled>Скачать private.pem</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <a id="dlImg" class="btn ghost" href="#" download="lk_patched.img" style="display:none;text-decoration:none;text-align:center;flex:1">⬇ Скачать lk_patched.img</a>
       </div>
       <div class="hash" id="patchHash"></div>
     </article>
@@ -289,17 +318,16 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
   </section>
 </main>
 
-<footer class="wrap foot">Всё выполняется локально: WebAssembly (Pyodide) + WebCrypto · worker.js · ключи не покидают браузер</footer>
-
 <script>
 'use strict';
 const $=s=>document.querySelector(s);
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 /* ================= лог ================= */
 const logEl=$('#log');
 function log(m){
+  if(window.console&&console.log)console.log(m);
   const d=document.createElement('div');
   d.innerHTML=`<span class="t">${new Date().toLocaleTimeString('ru-RU')}</span>${esc(m)}`;
   logEl.appendChild(d);
@@ -350,18 +378,29 @@ window.lkUnlock={
 function saveBlob(data,name){
   const a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob([data]));
-  a.download=name;a.click();
- setTimeout(()=>URL.revokeObjectURL(a.href),10000);
+  a.download=name;
+  // Element must be in the DOM for the download to fire in some browsers.
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(a.href),10000);
 }
 
 /* ================= UI-состояние ================= */
 const els={
   patch:$('#btnPatch'),
-  pem:$('#btnPem'),
+  dlImg:$('#dlImg'),
   sign:$('#btnSign'),
   token:$('#token'),
   drop:$('#drop'),
   meta:$('#fileMeta'),
+  dropLoaded:$('#dropLoaded'),
+  dropError:$('#dropError'),
+  fileCardName:$('#fileCardName'),
+  fileCardMeta:$('#fileCardMeta'),
+  btnRemove:$('#btnRemove'),
+  btnReplace:$('#btnReplace'),
+  dropEmpty:document.querySelector('.drop-empty'),
   badge:$('#badge'),
   badgeText:$('#badgeText'),
   importBtn:$('#btnImport'),
@@ -389,7 +428,7 @@ function setKeyStatus(source){
   if(source==='local'){
     els.keyDot.style.background='#22d07a';
     els.keyDot.style.boxShadow='0 0 10px #22d07a';
-    els.keyStatusText.textContent='Ключ: локальный (localStorage)';
+    els.keyStatusText.textContent='Ключ: из этой вкладки (session)';
     els.keyStatus.classList.add('active');
   }else if(source==='imported'){
     els.keyDot.style.background='#00d4ff';
@@ -409,19 +448,18 @@ function setKeyStatus(source){
 }
 
 function saveJwk(jwk){
-  try{localStorage.setItem('lk-unlock-jwk',JSON.stringify(jwk));}
-  catch(e){log('localStorage недоступен: '+e.message);}
+  try{sessionStorage.setItem('lk-unlock-jwk',JSON.stringify(jwk));}
+  catch(e){log('sessionStorage недоступен: '+e.message);}
 }
 function loadJwk(){
   try{
-    const s=localStorage.getItem('lk-unlock-jwk');
+    const s=sessionStorage.getItem('lk-unlock-jwk');
     return s?JSON.parse(s):null;
   }catch(e){return null;}
 }
 
 function sync(){
   els.patch.disabled=!state.ready||!state.buf||!!state.busy;
-  els.pem.disabled=!state.ready||!!state.busy;
   els.sign.disabled=!state.ready||!els.token.value.trim()||!!state.busy;
   els.importBtn.disabled=!state.ready||!!state.busy;
   els.exportBtn.disabled=!state.ready||!!state.busy;
@@ -470,31 +508,82 @@ function busy(btn,fn){
 function showHash(sel,h){const el=$(sel);el.textContent='SHA-256: '+h;el.classList.add('on');}
 
 /* ================= выбор файла / drag-and-drop ================= */
+const MAX_IMG_BYTES = 64 * 1024 * 1024;  // 64 MB guard against OOM
+let fileSeq = 0;  // race guard: ignore stale async results
+
+function setDropState(state, errText){
+  els.drop.classList.toggle('has', state==='loaded');
+  els.drop.classList.toggle('err', state==='error');
+  els.dropEmpty.style.display = (state==='loaded') ? 'none' : 'block';
+  els.dropLoaded.style.display = (state==='loaded') ? 'block' : 'none';
+  els.dropError.style.display = (state==='error') ? 'block' : 'none';
+  els.dropError.textContent = errText || '';
+}
+
 async function onFile(f){
   if(!f)return;
-  state.buf=await f.arrayBuffer();
-  els.meta.innerHTML=`<b>${esc(f.name)}</b><span>${(f.size/1048576).toFixed(2)} МБ</span>`;
-  els.drop.classList.add('has');
-  log('Файл выбран: '+f.name);
-  runDiag();
-  sync();}
+  const mySeq = ++fileSeq;
+  setDropState('loading');
+  els.dropError.style.display='none';
 
-async function runDiag(){
+  // extension filter (fast UX gate; not a security boundary)
+  const name = f.name || '';
+  const ext = name.toLowerCase().split('.').pop();
+  if(!['img','bin'].includes(ext)){
+    setDropState('error', `Файл не похож на образ LK. Ожидается .img или .bin.`);
+    return;
+  }
+  if(f.size > MAX_IMG_BYTES){
+    setDropState('error', `Файл слишком большой (${(f.size/1048576).toFixed(1)} МБ). Максимум 64 МБ.`);
+    return;
+  }
+
+  const buf = await f.arrayBuffer();
+  if(mySeq !== fileSeq) return;  // user chose another file meanwhile
+
+  state.buf = buf;
+  state.fileName = name;
+  log('Файл выбран: '+name);
+  runDiag(mySeq);
+  sync();
+}
+
+async function runDiag(mySeq){
   if(!state.ready||!state.buf)return;
   try{
     const d=await window.lkUnlock.diagnose(state.buf.slice(0));
+    if(mySeq !== fileSeq) return;  // stale result
     const parts=d.lk_partitions&&d.lk_partitions.length?d.lk_partitions.join(','):'нет';
     const key=d.has_oem_key?`да (0x${(d.oem_key_offset||0).toString(16)})`:'НЕТ';
     const magic=d.magic_ok?'OK':'НЕВЕРНАЯ';
     log(`Диагностика: magic=${magic} (${d.magic_hex}) · OEM-ключ: ${key} · разделы: ${parts}`);
     const ok=d.magic_ok&&d.has_oem_key;
-    els.meta.innerHTML=`<b>${els.meta.querySelector('b').textContent}</b><span>${ok?'✅ образ распознан':'⚠️ проверьте образ'}</span>`;
-  }catch(e){log('Диагностика: ошибка '+e.message);}
+    els.fileCardName.textContent = state.fileName;
+    els.fileCardMeta.innerHTML = `${(state.buf.byteLength/1048576).toFixed(2)} МБ · <span style="color:${ok?'#22d07a':'#f5a623'}">${ok?'✅ образ распознан':'⚠️ проверьте образ'}</span>`;
+    setDropState('loaded');
+  }catch(e){
+    if(mySeq !== fileSeq) return;
+    // Diagnostics failed, but keep the file loaded - just warn.
+    log('Диагностика: ошибка '+e.message);
+    els.fileCardName.textContent = state.fileName;
+    els.fileCardMeta.innerHTML = `${(state.buf.byteLength/1048576).toFixed(2)} МБ · <span style="color:#f5a623">⚠️ не удалось проанализировать</span>`;
+    setDropState('loaded');
+  }
 }
+
+function clearFile(){
+  state.buf=null; state.fileName=null;
+  fileSeq++;  // invalidate in-flight
+  setDropState('empty');
+  els.lkfile.value='';
+  sync();
+}
+els.btnRemove.onclick = clearFile;
+
 $('#lkfile').addEventListener('change',e=>onFile(e.target.files[0]));
 ['dragenter','dragover'].forEach(t=>els.drop.addEventListener(t,e=>{e.preventDefault();els.drop.classList.add('drag');}));
 ['dragleave','drop'].forEach(t=>els.drop.addEventListener(t,e=>{e.preventDefault();els.drop.classList.remove('drag');}));
-els.drop.addEventListener('drop',e=>onFile(e.dataTransfer.files[0]));
+els.drop.addEventListener('drop',e=>{e.preventDefault();onFile(e.dataTransfer.files[0]);});
 
 /* ================= key import / export ================= */
 els.importBtn.onclick=()=>els.pemFile.click();
@@ -508,7 +597,7 @@ els.pemFile.addEventListener('change',e=>{
     if(r&&r.jwk){
       saveJwk(r.jwk);
       setKeyStatus('imported');
-      log('Ключ импортирован и сохранён в localStorage.');
+      log('Ключ импортирован и сохранён в этой вкладке.');
     }
   });
   els.pemFile.value='';
@@ -527,16 +616,14 @@ els.patch.onclick=()=>busy(els.patch,async()=>{
   log('Патчим lk.img…');
   const r=await window.lkUnlock.patchBuffer(state.buf.slice(0));
   state.pem=r.pem;
-  saveBlob(r.img,'lk_patched.img');
+  // Show an active download link instead of auto-clicking after await
+  // (browsers block programmatic downloads outside a user gesture).
+  const url=URL.createObjectURL(new Blob([r.img]));
+  const a=els.dlImg;
+  a.href=url; a.style.display='flex';
+  setTimeout(()=>URL.revokeObjectURL(url),30000);
   showHash('#patchHash',r.sha256);
-  log('Готово: lk_patched.img сохранён · SHA-256 '+r.sha256.slice(0,16)+'…');
-});
-els.pem.onclick=()=>busy(els.pem,async()=>{
-  let pem=state.pem;
-  if(!pem){const r=await rpc('pem');pem=typeof r==='string'?r:r.pem;}
-  state.pem=pem;
-  saveBlob(new TextEncoder().encode(pem),'private.pem');
-  log('private.pem сохранён');
+  log('Готово: lk_patched.img · SHA-256 '+r.sha256.slice(0,16)+'…');
 });
 els.sign.onclick=()=>busy(els.sign,async()=>{
   log('Подписываем токен…');
@@ -571,7 +658,7 @@ function finishSplash(){
   if(stored&&stored.kty==='RSA'){
     jwk=stored;
     source='local';
-    log('Ключ восстановлен из localStorage.');
+    log('Ключ восстановлен из этой вкладки.');
   }
 
   for(let i=1;i<=60&&!state.ready;i++){

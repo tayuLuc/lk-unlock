@@ -96,7 +96,7 @@ async function handle(msg) {
       return {type: "result", jwk: JSON.parse(pw.get_jwk())};
     case "diagnose": {
       await ensurePyodide();
-      const r = JSON.parse(pw.diagnose_file(msg.buf));
+      const r = JSON.parse(pw.diagnose_file(new Uint8Array(msg.buf)));
       return {type: "result", ...r};
     }
     case "parse_token": {
