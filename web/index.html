@@ -2,40 +2,398 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>lk-unlock web — патчер загрузчика Xiaomi MTK</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>MTK Forge — патчер lk.img (Pyodide/WASM)</title>
 <style>
-:root{color-scheme:light dark;font-family:system-ui,sans-serif}
-body{max-width:860px;margin:2rem auto;padding:0 1rem;line-height:1.45}
-.card{border:1px solid #8884;border-radius:10px;padding:1rem 1.2rem;margin:1rem 0}
-h1{font-size:1.4rem}h2{font-size:1.05rem;margin:.2rem 0 .8rem}
-button{padding:.5rem 1rem;font:inherit;cursor:pointer;margin-right:.5rem}
-textarea{width:100%;height:7rem;font-family:monospace}
-pre#log{background:#8881;border-radius:8px;padding:.7rem;min-height:6rem;white-space:pre-wrap}
-:disabled{opacity:.5;cursor:wait}
-.warn{color:#b60}
+:root{
+  --bg:#06070b;
+  --text:#eef0f6;
+  --muted:#8b90a1;
+  --panel:rgba(255,255,255,.04);
+  --border:rgba(255,255,255,.09);
+  --acc1:#7c5cff; --acc2:#00d4ff;
+  --grad:linear-gradient(135deg,var(--acc1),var(--acc2));
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --r:18px;
+}
+*{box-sizing:border-box}
+html{color-scheme:dark}
+body{margin:0;font:15px/1.6 var(--sans);color:var(--text);background:var(--bg);
+  -webkit-font-smoothing:antialiased;min-height:100vh}
+::selection{background:rgba(124,92,255,.4)}
+:focus-visible{outline:2px solid var(--acc2);outline-offset:2px;border-radius:6px}
+
+/* ---------- фон: сетка + светящиеся сферы ---------- */
+.bg{position:fixed;inset:0;z-index:-1;overflow:hidden;
+  background:
+    linear-gradient(rgba(255,255,255,.028) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.028) 1px,transparent 1px),
+    radial-gradient(1100px 700px at 75% -10%,#151a33 0%,transparent 60%),
+    var(--bg);
+  background-size:44px 44px,44px 44px,auto,auto; mask-image:radial-gradient(ellipse 120% 90% at 50% 0%,#000 55%,transparent 100%);
+  -webkit-mask-image:radial-gradient(ellipse 120% 90% at 50% 0%,#000 55%,transparent 100%)}
+.bg::before,.bg::after{content:'';position:absolute;width:58vmax;height:58vmax;
+  border-radius:50%;filter:blur(90px);opacity:.15;will-change:transform}
+.bg::before{background:radial-gradient(circle,var(--acc1),transparent 60%);
+  top:-22vmax;left:-14vmax;animation:float 18s ease-in-out infinite alternate}
+.bg::after{background:radial-gradient(circle,var(--acc2),transparent 60%);
+  bottom:-26vmax;right:-14vmax;animation:float 24s ease-in-out infinite alternate-reverse}
+@keyframes float{to{transform:translate(6vmax,4vmax) scale(1.1)}}@keyframes pulse{50%{opacity:.45}}
+
+/* ---------- каркас ---------- */
+.wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+.top{display:flex;justify-content:space-between;align-items:center;padding-top:22px;padding-bottom:22px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.3px}
+.badge{display:flex;align-items:center;gap:8px;font:12px var(--mono);color:var(--muted);
+  padding:6px 13px;border:1px solid var(--border);border-radius:999px;background:rgba(255,255,255,.03)}
+.dot{width:8px;height:8px;border-radius:50%;background:#f5a623;box-shadow:0 0 10px #f5a623;
+  animation:pulse 1.4s ease-in-out infinite;transition:.4s}
+.badge.on .dot{background:#22d07a;box-shadow:0 0 10px #22d07a;animation:none}
+.badge.on{color:#22d07a}
+
+/* ---------- hero ---------- */
+.hero{margin:46px 0 30px}
+.tag{display:inline-block;font:11px var(--mono);letter-spacing:2.5px;color:var(--acc2);
+  border:1px solid rgba(0,212,255,.25);background:rgba(0,212,255,.06);
+  padding:6px 12px;border-radius:999px;margin-bottom:18px}
+h1{margin:0 0 14px;font-size:clamp(30px,5vw,52px);font-weight:750;letter-spacing:-.02em;line-height:1.1}
+.grad{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p{margin:0;max-width:580px;color:var(--muted)}
+
+/* ---------- карточки ---------- */
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.card{position:relative;overflow:hidden;background:var(--panel);border:1px solid var(--border);
+  border-radius:var(--r);padding:24px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  transition:transform .3s,border-color .3s,box-shadow .3s}
+.card::before{content:'';position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .4s;
+  background:radial-gradient(340px circle at var(--mx,50%) var(--my,0%),rgba(124,92,255,.13),transparent 70%)}
+.card:hover{transform:translateY(-3px);border-color:rgba(255,255,255,.18);
+  box-shadow:0 20px 50px -20px rgba(124,92,255,.35)}
+.card:hover::before{opacity:1}
+.c-head{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+.num{font:12px var(--mono);background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.c-head h2{margin:0;font-size:16px;font-weight:650;flex:1}
+.c-tag{font:11px var(--mono);color:var(--muted)}
+.c-desc{margin:4px 0 16px;font-size:13.5px;color:var(--muted)}
+
+/* ---------- drop-зона ---------- */
+.drop{display:flex;flex-direction:column;align-items:center;gap:4px;text-align:center;
+  padding:30px 18px;border:1px dashed rgba(255,255,255,.18);border-radius:14px;
+  color:var(--muted);cursor:pointer;transition:.25s}
+.drop b{color:var(--text);font-weight:600;font-size:14px}
+.drop span{font-size:12.5px}
+.drop svg{margin-bottom:6px;transition:.25s}
+.drop:hover,.drop.drag{border-color:var(--acc2);color:var(--text);
+  background:rgba(124,92,255,.07);box-shadow:inset 0 0 40px rgba(124,92,255,.06)}
+.drop.drag svg,.drop:hover svg{transform:translateY(-3px);stroke:var(--acc2)}
+.drop.has{border-style:solid;border-color:rgba(34,208,122,.4)}
+.meta{display:flex;justify-content:space-between;gap:10px;font:12px var(--mono);
+  color:var(--muted);margin:12px 2px 14px}
+.meta b{color:var(--text);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---------- кнопки ---------- */
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.btn{appearance:none;border:0;border-radius:12px;padding:12px 18px;cursor:pointer;
+  font:600 14px/1.2 var(--sans);color:var(--text);transition:.25s}
+.btn.primary{flex:1;background:var(--grad);color:#fff;
+  box-shadow:0 8px 26px -8px rgba(124,92,255,.6)}
+.btn.primary:hover:not(:disabled){transform:translateY(-1px);filter:saturate(1.2) brightness(1.08);
+  box-shadow:0 12px 34px -8px rgba(124,92,255,.8)}
+.btn.ghost{background:rgba(255,255,255,.05);border:1px solid var(--border)}
+.btn.ghost:hover:not(:disabled){background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.22)}
+.btn:disabled{opacity:.35;cursor:not-allowed}
+.btn.busy{animation:pulse 1s ease-in-out infinite}
+
+/* ---------- токен ---------- */
+.lbl{display:block;font:12px var(--mono);color:var(--muted);margin-bottom:8px}
+textarea{width:100%;min-height:132px;resize:vertical;background:rgba(0,0,0,.35);
+  border:1px solid var(--border);border-radius:12px;color:var(--text);
+  font:12.5px/1.7 var(--mono);padding:12px 14px;transition:.25s}
+textarea::placeholder{color:#565b6d}
+textarea:focus{outline:none;border-color:var(--acc1);box-shadow:0 0 0 3px rgba(124,92,255,.16)}
+.hash{font:11px/1.5 var(--mono);color:var(--muted);word-break:break-all;
+  margin-top:12px;opacity:0;transform:translateY(4px);transition:.45s}
+.hash.on{opacity:1;transform:none}
+
+/* ---------- лог ---------- */
+.log-card{margin-top:20px}
+.btn.mini{padding:6px 12px;font-size:12px;border-radius:9px}
+pre#log{margin:0;max-height:220px;overflow:auto;padding:14px 16px;border-radius:12px;
+  background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.05);
+  font:12px/1.8 var(--mono);color:#a7adbe;scrollbar-width:thin}
+pre#log div .t{color:#4d5266;margin-right:10px}
+pre#log::-webkit-scrollbar{width:8px}
+pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:99px}
+
+.foot{padding:40px 22px 46px;text-align:center;color:#565b6d;font-size:13px}
+
+/* ---------- сплэш ---------- */
+#splash{position:fixed;inset:0;z-index:100;background:var(--bg);display:flex; align-items:center;justify-content:center;transition:opacity .6s}
+#splash.hide{opacity:0;pointer-events:none}
+.s-card{text-align:center;width:min(340px,82vw)}
+.s-logo{animation:pulse 2.2s ease-in-out infinite}
+.s-card h2{margin:16px 0 4px;font-size:22px;letter-spacing:-.01em}
+.s-sub{margin:0 0 26px;font:12px var(--mono);color:var(--muted)}
+.bar{height:4px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--grad);border-radius:99px;
+  box-shadow:0 0 14px rgba(124,92,255,.9);transition:width .2s}
+.s-row{display:flex;justify-content:space-between;margin-top:10px;
+  font:12px var(--mono);color:var(--muted)}
+
+/* ---------- адаптив / доступность ---------- */
+@media(max-width:880px){
+  .grid{grid-template-columns:1fr}
+  .hero{margin:26px 0 22px}
+  .btn.primary{flex-basis:100%}
+}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}}
 </style>
 </head>
 <body>
-<h1>lk-unlock <small>(Pyodide/WASM, всё выполняется в вашем браузере)</small></h1>
-<p class="warn">Ключ генерируется и живёт только в браузере. После загрузки страница не делает сетевых запросов.</p>
+<div class="bg" aria-hidden="true"></div>
 
-<div class="card">
-  <h2>1. Патч lk.img</h2>
-  <input type="file" id="lkfile" accept=".img,.bin">
-  <p><button id="btnPatch" disabled>Патчить lk.img</button>
-     <button id="btnPem" disabled>Скачать private.pem</button></p>
-  <small>Скачаются lk_patched.img и private.pem (одна пара ключей на обе операции).</small>
+<!-- сплэш загрузки Pyodide -->
+<div id="splash" role="status">
+  <div class="s-card">
+    <svg class="s-logo" width="54" height="54" viewBox="0 0 24 24" fill="none">
+      <defs><linearGradient id="gS" x1="0" y1="0" x2="24" y2="24">
+        <stop stop-color="#7c5cff"/><stop offset="1" stop-color="#00d4ff"/></linearGradient></defs>
+      <rect x="1.5" y="1.5" width="21" height="21" rx="6.5" fill="url(#gS)" opacity=".14"/>
+      <rect x="1.5" y="1.5" width="21" height="21" rx="6.5" stroke="url(#gS)" stroke-width="1.4"/>
+      <path d="M13 5.2 7.4 13H11l-1 5.8L15.6 11H12l1-5.8Z" fill="url(#gS)"/>
+    </svg>
+    <h2>MTK Forge</h2>
+    <p class="s-sub">ПАТЧЕР ПРОШИВОК MEDIATEK · PYODIDE/WASM</p>
+    <div class="bar"><i id="splashBar"></i></div>
+    <div class="s-row"><span id="splashStatus">Загружаем Pyodide…</span><span id="splashPct">0%</span></div>
+  </div>
 </div>
 
-<div class="card">
-  <h2>2. Подпись токена из <code>fastboot oem get_token</code></h2>
-  <textarea id="token" placeholder="(bootloader) token: ..."></textarea>
-  <p><button id="btnSign" disabled>Подписать → signature.bin</button></p>
-</div>
+<header class="wrap top">
+  <div class="brand">
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+      <defs><linearGradient id="gB" x1="0" y1="0" x2="24" y2="24">
+        <stop stop-color="#7c5cff"/><stop offset="1" stop-color="#00d4ff"/></linearGradient></defs>
+      <rect x="1.5" y="1.5" width="21" height="21" rx="6.5" fill="url(#gB)" opacity=".14"/>
+      <rect x="1.5" y="1.5" width="21" height="21" rx="6.5" stroke="url(#gB)" stroke-width="1.4"/>
+      <path d="M13 5.2 7.4 13H11l-1 5.8L15.6 11H12l1-5.8Z" fill="url(#gB)"/>
+    </svg>
+    MTK Forge
+  </div>
+  <div class="badge" id="badge"><span class="dot"></span><span id="badgeText">Загрузка Pyodide…</span></div>
+</header>
 
-<h2>Лог</h2>
-<pre id="log"></pre>
-<script src="./main.js"></script>
+<main class="wrap">
+  <section class="hero">
+    <div class="tag">PYODIDE · WASM · 100% OFFLINE</div>
+    <h1>Разблокировка <span class="grad">MediaTek</span><br>прямо в браузере</h1>
+    <p>Патч загрузчика lk.img и подпись токенов выполняются локально на вашем устройстве. Файлы и ключи никуда не отправляются.</p>
+  </section>
+
+  <section class="grid">
+    <!-- карточка 1: патч lk.img -->
+    <article class="card">
+      <div class="c-head"><span class="num">01</span><h2>Патч lk.img</h2><span class="c-tag">bootloader</span></div>
+      <p class="c-desc">Загрузите образ — на выходе получите пропатченный lk_patched.img и приватный ключ private.pem.</p>
+      <label class="drop" id="drop" for="lkfile">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 16V4m0 0 4 4m-4-4L8 8M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>
+        </svg>
+        <b>Перетащите lk.img сюда</b>
+        <span>или нажмите для выбора файла</span>
+      </label>
+      <input type="file" id="lkfile" accept=".img,.bin,application/octet-stream" hidden>
+      <div class="meta" id="fileMeta"><span>Файл не выбран</span><span></span></div>
+      <div class="row">
+        <button id="btnPatch" class="btn primary" disabled>Патчить → lk_patched.img</button>
+        <button id="btnPem" class="btn ghost" disabled>Скачать private.pem</button>
+      </div>
+      <div class="hash" id="patchHash"></div>
+    </article>
+
+    <!-- карточка 2: подпись токена -->
+    <article class="card">
+      <div class="c-head"><span class="num">02</span><h2>Подпись токена</h2><span class="c-tag">auth</span></div>
+      <p class="c-desc">Вставьте токен, полученный от устройства — на выходе подпись signature.bin.</p>
+      <label class="lbl" for="token">ТОКЕН (HEX / BASE64)</label>
+      <textarea id="token" spellcheck="false" placeholder="Вставьте токен…"></textarea>
+      <div class="row" style="margin-top:14px">
+        <button id="btnSign" class="btn primary" disabled>Подписать → signature.bin</button>
+      </div>
+      <div class="hash" id="signHash"></div>
+    </article>
+  </section>
+
+  <!-- журнал -->
+  <section class="card log-card">
+    <div class="c-head"><h2 style="margin:0;font-size:15px">Журнал</h2>
+      <button id="btnClear" class="btn ghost mini" style="margin-left:auto">очистить</button></div>
+    <pre id="log" aria-live="polite"></pre>
+  </section>
+</main>
+
+<footer class="wrap foot">Всё выполняется локально: WebAssembly (Pyodide) + WebCrypto · worker.js · ключи не покидают браузер</footer>
+
+<script>
+'use strict';
+const $=s=>document.querySelector(s);
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ================= лог ================= */
+const logEl=$('#log');
+function log(m){
+  const d=document.createElement('div');
+  d.innerHTML=`<span class="t">${new Date().toLocaleTimeString('ru-RU')}</span>${esc(m)}`;
+  logEl.appendChild(d);
+  while(logEl.childElementCount>300)logEl.firstChild.remove();
+  logEl.scrollTop=logEl.scrollHeight;
+}
+$('#btnClear').onclick=()=>logEl.innerHTML='';
+
+/* ================= worker / rpc ================= */
+const worker=new Worker('worker.js');
+let seq=0;const pending=new Map();
+function rpc(method,data={},transfer=[]){
+  return new Promise((resolve,reject)=>{
+    const id=++seq;pending.set(id,{resolve,reject});
+    worker.postMessage({id,method,...data},transfer);
+  });
+}
+worker.onmessage=e=>{
+  const d=e.data||{};
+  if(typeof d.log==='string')log(d.log);
+  if(typeof d.progress==='number')setSplash(d.progress<=1?d.progress*100:d.progress);
+  if(!d.id)return;
+  const p=pending.get(d.id);if(!p)return;pending.delete(d.id);
+  d.error?p.reject(new Error(d.error)):p.resolve(d.result!==undefined?d.result:d);
+};
+worker.onerror=e=>log('worker: '+e.message);
+
+/* ============ контракт lkUnlock (без изменений) ============ */
+const state={ready:false,buf:null,pem:null,busy:null};
+window.lkUnlock={
+  ready:()=>state.ready,
+  init:jwk=>rpc('init',{jwk}),
+  patchBuffer:(buf,jwk)=>(jwk?window.lkUnlock.init(jwk):Promise.resolve())
+      .then(()=>rpc('patch',{buf},[buf])),
+  signToken:text=>rpc('sign',{text}),
+};
+
+/* ================= утилита сохранения ================= */
+function saveBlob(data,name){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([data]));
+  a.download=name;a.click();
+ setTimeout(()=>URL.revokeObjectURL(a.href),10000);
+}
+
+/* ================= UI-состояние ================= */
+const els={patch:$('#btnPatch'),pem:$('#btnPem'),sign:$('#btnSign'),token:$('#token'),
+  drop:$('#drop'),meta:$('#fileMeta'),badge:$('#badge'),badgeText:$('#badgeText')};
+function sync(){
+  els.patch.disabled=!state.ready||!state.buf||!!state.busy;
+  els.pem.disabled=!state.ready||!!state.busy;
+  els.sign.disabled=!state.ready||!els.token.value.trim()||!!state.busy;
+}
+els.token.addEventListener('input',sync);
+
+function busy(btn,fn){
+  state.busy=btn;const old=btn.textContent;
+  btn.textContent='Выполняется…';sync();
+  Promise.resolve().then(fn)
+    .catch(e=>log('Ошибка: '+(e&&e.message||e)))
+    .finally(()=>{state.busy=null;btn.textContent=old;sync();});
+}
+function showHash(sel,h){const el=$(sel);el.textContent='SHA-256: '+h;el.classList.add('on');}
+
+/* ================= выбор файла / drag-and-drop ================= */
+async function onFile(f){
+  if(!f)return;
+  state.buf=await f.arrayBuffer();
+  els.meta.innerHTML=`<b>${esc(f.name)}</b><span>${(f.size/1048576).toFixed(2)} МБ</span>`;
+  els.drop.classList.add('has');
+  log('Файл выбран: '+f.name);
+  sync();}
+$('#lkfile').addEventListener('change',e=>onFile(e.target.files[0]));
+['dragenter','dragover'].forEach(t=>els.drop.addEventListener(t,e=>{e.preventDefault();els.drop.classList.add('drag');}));
+['dragleave','drop'].forEach(t=>els.drop.addEventListener(t,e=>{e.preventDefault();els.drop.classList.remove('drag');}));
+els.drop.addEventListener('drop',e=>onFile(e.dataTransfer.files[0]));
+
+/* ================= действия ================= */
+els.patch.onclick=()=>busy(els.patch,async()=>{
+  log('Патчим lk.img…');
+  const r=await window.lkUnlock.patchBuffer(state.buf.slice(0));
+  state.pem=r.pem;
+  saveBlob(r.img,'lk_patched.img');
+  showHash('#patchHash',r.sha256);
+  log('Готово: lk_patched.img сохранён · SHA-256 '+r.sha256.slice(0,16)+'…');
+});
+els.pem.onclick=()=>busy(els.pem,async()=>{
+  let pem=state.pem;
+  if(!pem){const r=await rpc('pem');pem=typeof r==='string'?r:r.pem;}
+  state.pem=pem;
+  saveBlob(new TextEncoder().encode(pem),'private.pem');
+  log('private.pem сохранён');
+});
+els.sign.onclick=()=>busy(els.sign,async()=>{
+  log('Подписываем токен…');
+  const r=await window.lkUnlock.signToken(els.token.value.trim());
+  saveBlob(r.sig,'signature.bin');
+  showHash('#signHash',r.sha256);
+  log('Готово: signature.bin сохранён · SHA-256 '+r.sha256.slice(0,16)+'…');
+});
+
+/* ================= сплэш ================= */
+const splash=$('#splash'),bar=$('#splashBar'),pct=$('#splashPct'),sStat=$('#splashStatus');
+const phrases=['Загружаем Pyodide…','Распаковываем WASM-модули…','Готовим криптографию…','Почти готово…'];
+let prog=0,tick=0,splashDone=false;
+const splashTimer=setInterval(()=>{
+  if(splashDone)return;
+  prog+=(92-prog)*.03;paint();
+  if(++tick%25===0)sStat.textContent=phrases[Math.min(phrases.length-1,(tick/25|0)-1)];
+},120);
+function paint(){bar.style.width=prog+'%';pct.textContent=Math.round(prog)+'%';}
+function setSplash(p){prog=Math.max(prog,p);paint();}
+function finishSplash(){
+  if(splashDone)return;splashDone=true;clearInterval(splashTimer);
+  prog=100;paint();sStat.textContent='Готово';
+  setTimeout(()=>{splash.classList.add('hide');setTimeout(()=>splash.remove(),700);},350);
+}
+
+/* ================= старт: ключ + init ================= */
+(async function boot(){
+  let jwk;
+  try{
+    /* ВАЖНО: worker ожидает RSA-2048 (RSASSA-PKCS1-v1_5), не ECDSA. */
+    const pair=await crypto.subtle.generateKey(
+      {name:'RSASSA-PKCS1-v1_5',modulusLength:2048,
+       publicExponent:new Uint8Array([1,0,1]),hash:'SHA-256'},
+      true,['sign','verify']);
+    jwk=await crypto.subtle.exportKey('jwk',pair.privateKey); // ключ живёт только локально
+  }catch(e){sStat.textContent='Ошибка WebCrypto (нужен HTTPS или localhost)';return;}
+  for(let i=1;i<=60&&!state.ready;i++){
+    try{await window.lkUnlock.init(jwk);onReady();}
+    catch(e){await sleep(1200);} // Pyodide ещё грузится — ждём и повторяем
+  }
+  if(!state.ready)sStat.textContent='Не удалось связаться с worker.js';
+})();
+function onReady(){
+  state.ready=true;
+  els.badge.classList.add('on');els.badgeText.textContent='Pyodide готов';
+  log('Ядро загружено. Можно начинать.');
+  finishSplash();sync();
+}
+
+/* «прожектор» на карточках */
+document.querySelectorAll('.card').forEach(c=>c.addEventListener('pointermove',e=>{
+  const r=c.getBoundingClientRect();
+  c.style.setProperty('--mx',(e.clientX-r.left)+'px');
+  c.style.setProperty('--my',(e.clientY-r.top)+'px');
+}));
+</script>
 </body>
 </html>
