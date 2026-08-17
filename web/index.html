@@ -89,6 +89,7 @@ h1{margin:0 0 14px;font-size:clamp(30px,5vw,52px);font-weight:750;letter-spacing
   background:rgba(124,92,255,.07);box-shadow:inset 0 0 40px rgba(124,92,255,.06)}
 .drop.drag svg,.drop:hover svg{transform:translateY(-3px);stroke:var(--acc2)}
 .drop.has{border-style:solid;border-color:rgba(34,208,122,.4)}
+.drop.warn{border-style:solid;border-color:#f5a623;background:rgba(245,166,35,.05)}
 .drop.err{border-style:solid;border-color:#ef4444;background:rgba(239,68,68,.05)}
 .drop-error{font:12.5px var(--sans);color:#ef4444;margin-top:8px;text-align:center}
 .drop-loaded{width:100%}
@@ -128,6 +129,12 @@ textarea:focus{outline:none;border-color:var(--acc1);box-shadow:0 0 0 3px rgba(1
   margin-top:12px;opacity:0;transform:translateY(4px);transition:.45s}
 .hash.on{opacity:1;transform:none}
 
+/* ---------- token explanation ---------- */
+.token-explain{margin:14px 0 0;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:rgba(255,255,255,.02)}
+.token-explain summary{cursor:pointer;font:12.5px var(--sans);color:var(--acc2);user-select:none}
+.token-explain p{margin:8px 0 0;font:12.5px/1.6 var(--sans);color:var(--muted)}
+.token-explain code{font-family:var(--mono);color:var(--text)}
+
 /* ---------- token visualization (base64 <-> bytes) ---------- */
 #token-viz-status{margin:8px 0;font:12px var(--mono);color:var(--muted);min-height:16px}
 #token-viz{margin-top:12px;border:1px solid var(--border);border-radius:12px;padding:12px;background:rgba(0,0,0,.2)}
@@ -135,7 +142,7 @@ textarea:focus{outline:none;border-color:var(--acc1);box-shadow:0 0 0 3px rgba(1
 @media(max-width:900px){.token-viz-grid{grid-template-columns:1fr}}
 .pane{min-width:0}
 .pane h3{margin:0 0 8px;font:13px var(--sans);color:var(--text)}
-#b64-view,#hex-view{user-select:none;border:1px solid var(--border);border-radius:8px;padding:8px;overflow:auto;max-height:260px;background:rgba(0,0,0,.35)}
+#b64-view,#hex-view{user-select:none;border:1px solid var(--border);border-radius:8px;padding:8px;overflow:visible;background:rgba(0,0,0,.35)}
 .mono,#b64-view,#hex-view{font-family:var(--mono);font-size:12px;line-height:1.5}
 .b64-line{white-space:pre}
 .b64-char{border-radius:2px;transition:background-color 120ms ease,box-shadow 120ms ease}
@@ -322,6 +329,8 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
       <p class="c-desc">Вставьте токен, полученный от устройства — на выходе подпись signature.bin.</p>
       <label class="lbl" for="token">ТОКЕН (HEX / BASE64)</label>
       <textarea id="token" spellcheck="false" placeholder="Вставьте токен…"></textarea>
+      <label class="lbl" for="fingerprint" style="margin-top:10px">FINGERPRINT (необязательно, для сверки ОС)</label>
+      <input id="fingerprint" type="text" spellcheck="false" placeholder="POCO/fleur_p_ru/fleur:13/.../TKERUXM:user/release-keys" style="width:100%;background:rgba(0,0,0,.35);border:1px solid var(--border);border-radius:12px;color:var(--text);font:12px var(--mono);padding:10px 12px">
       <div class="os-warning" id="osWarning">
         <b id="osWarningTitle">Предупреждение:</b> <span id="osWarningText"></span>
       </div>
@@ -331,26 +340,34 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
         <div class="token-checklist-item" id="tokenDevice"><span>⏳</span><span>Устройство</span></div>
       </div>
 
-      <!-- token visualization: base64 <-> bytes mapping -->
-      <div id="token-viz-status" role="status" aria-live="polite"></div>
-      <section id="token-viz" hidden aria-label="Визуализация токена">
-        <div class="token-viz-grid">
-          <div class="pane">
-            <h3>Base64</h3>
-            <div id="b64-view" class="mono interactive" tabindex="0" aria-label="Base64 представление токена"></div>
-          </div>
-          <div class="pane">
-            <h3>Bytes</h3>
-            <div id="hex-view" class="mono interactive" tabindex="0" aria-label="Байтовое представление токена"></div>
-          </div>
-        </div>
-      </section>
-
       <div class="row" style="margin-top:14px">
         <button id="btnSign" class="btn primary" disabled>Подписать → signature.bin</button>
       </div>
       <div class="hash" id="signHash"></div>
+
+      <details class="token-explain">
+        <summary>Что такое токен и зачем подпись?</summary>
+        <p>Токен приходит от вашего телефона по команде <code>fastboot oem get_token</code>. Он <b>уникален для каждого устройства</b> и содержит имя модели (например, «fleur») — поэтому не у всех одинаковый.</p>
+        <p>Подпись <code>signature.bin</code> — это математическая операция над токеном вашим приватным ключом. Телефон проверяет её публичным ключом, который вшит в <b>пропатченный</b> <code>lk_patched.img</code>. Совпало — разблокирован.</p>
+        <p><b>Важно:</b> патч и подпись должны использовать <b>один и тот же</b> <code>private.pem</code>. Если потерять или перепутать ключ — телефон откажет, придётся перепатчивать.</p>
+      </details>
     </article>
+  </section>
+
+  <!-- token visualization: base64 <-> bytes mapping (own block before log) -->
+  <section class="card" id="tokenVizCard" style="display:none">
+    <div class="c-head"><h2 style="margin:0;font-size:15px">Визуализация токена</h2></div>
+    <div id="token-viz-status" role="status" aria-live="polite"></div>
+    <div class="token-viz-grid">
+      <div class="pane">
+        <h3>Base64</h3>
+        <div id="b64-view" class="mono interactive" tabindex="0" aria-label="Base64 представление токена"></div>
+      </div>
+      <div class="pane">
+        <h3>Bytes</h3>
+        <div id="hex-view" class="mono interactive" tabindex="0" aria-label="Байтовое представление токена"></div>
+      </div>
+    </div>
   </section>
 
   <!-- журнал -->
@@ -436,6 +453,7 @@ const els={
   lkfile:$('#lkfile'),
   sign:$('#btnSign'),
   token:$('#token'),
+  fingerprint:$('#fingerprint'),
   drop:$('#drop'),
   meta:$('#fileMeta'),
   dropLoaded:$('#dropLoaded'),
@@ -519,6 +537,17 @@ function setCheck(item,ok,text){
   else{el.classList.add('err');el.querySelectorAll('span')[0].textContent='✗';}
   if(text)el.querySelectorAll('span')[1].textContent=text;
 }
+// Extract device codename from a fingerprint like
+// "POCO/fleur_p_ru/fleur:13/..." -> "fleur"; compare with token device_name.
+// Returns true/false if a match decision is possible, else null (no fp device).
+function matchDeviceFromFingerprint(fp, tokenDevice){
+  if(!fp||!tokenDevice) return null;
+  // fingerprint: brand/name/device:android/...  device is the 3rd "/"-field
+  const parts = fp.split('/');
+  const dev = parts.length>=3 ? parts[2].split(':')[0].trim().toLowerCase() : '';
+  if(!dev) return null;
+  return dev === String(tokenDevice).toLowerCase();
+}
 function analyzeToken(){
   if(!state.ready)return;
   const val=els.token.value.trim();
@@ -539,6 +568,21 @@ function analyzeToken(){
       setCheck('#tokenDevice',false,'—');
     }
     els.sign.disabled=!okB;
+    // OS detection (MIUI vs HyperOS) + device-name match if fingerprint provided.
+    const fp=(els.fingerprint&&els.fingerprint.value||'').trim();
+    if(fp&&okB){
+      window.lkUnlock.detectOS(fp).then(d=>{
+        if(d.warning){els.osWarningText.textContent=d.warning;els.osWarning.classList.add('show');}
+        else els.osWarning.classList.remove('show');
+        // Match device name from fingerprint vs token device_name.
+        const devMatch = matchDeviceFromFingerprint(fp, r.device_name);
+        if(devMatch!==null){
+          setCheck('#tokenDevice', devMatch, devMatch?(r.device_name+' ✓'):(r.device_name+' ✗ не совпадает'));
+        }
+      }).catch(()=>{});
+    } else if(!fp){
+      els.osWarning.classList.remove('show');
+    }
   }).catch(()=>{
     setCheck('#tokenBase64',false,'Ошибка анализа');
     setCheck('#tokenPrefix',false,'');
@@ -563,9 +607,10 @@ let fileSeq = 0;  // race guard: ignore stale async results
 
 function setDropState(state, errText){
   els.drop.classList.toggle('has', state==='loaded');
+  els.drop.classList.toggle('warn', state==='warn');
   els.drop.classList.toggle('err', state==='error');
-  els.dropEmpty.style.display = (state==='loaded') ? 'none' : 'block';
-  els.dropLoaded.style.display = (state==='loaded') ? 'block' : 'none';
+  els.dropEmpty.style.display = (state==='loaded'||state==='warn') ? 'none' : 'block';
+  els.dropLoaded.style.display = (state==='loaded'||state==='warn') ? 'block' : 'none';
   els.dropError.style.display = (state==='error') ? 'block' : 'none';
   els.dropError.textContent = errText || '';
 }
@@ -610,7 +655,7 @@ async function runDiag(mySeq){
     const ok=d.magic_ok&&d.has_oem_key;
     els.fileCardName.textContent = state.fileName;
     els.fileCardMeta.innerHTML = `${(state.buf.byteLength/1048576).toFixed(2)} МБ · <span style="color:${ok?'#22d07a':'#f5a623'}">${ok?'✅ образ распознан':'⚠️ проверьте образ'}</span>`;
-    setDropState('loaded');
+    setDropState(ok?'loaded':'warn');
   }catch(e){
     if(mySeq !== fileSeq) return;
     // Diagnostics failed, but keep the file loaded - just warn.
@@ -752,7 +797,7 @@ async function showKeyFingerprint(){
 (() => {
   const MAX_B64 = 20000;
   const tokenEl = document.querySelector('#token');
-  const vizEl = document.querySelector('#token-viz');
+  const vizEl = document.querySelector('#tokenVizCard');
   const statusEl = document.querySelector('#token-viz-status');
   const b64El = document.querySelector('#b64-view');
   const hexEl = document.querySelector('#hex-view');
@@ -936,7 +981,7 @@ async function showKeyFingerprint(){
       if(id!==seq) return;
       st.norm=norm; st.dataChars=dataChars; st.bytes=bytes; st.segments=[];
       clearInt(); renderBase64(); renderHex(); applySegments(); paint();
-      vizEl.hidden = bytes.length===0; statusEl.textContent='';
+      vizEl.style.display = bytes.length===0 ? 'none' : 'block'; statusEl.textContent='';
       if(!bytes.length) return;
       const res=await window.lkUnlock.parseToken(norm);
       if(id!==seq) return;
@@ -946,7 +991,7 @@ async function showKeyFingerprint(){
       if(id!==seq) return;
       st.norm='';st.dataChars=0;st.bytes=new Uint8Array(0);st.segments=[];
       clearInt(); renderBase64(); renderHex(); paint();
-      vizEl.hidden=true; statusEl.textContent=`Визуализация: ${err.message}`;
+      vizEl.style.display='none'; statusEl.textContent=`Визуализация: ${err.message}`;
     }
   }
   let tmr;
