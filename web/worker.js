@@ -1,5 +1,5 @@
 "use strict";
-/* Web Worker: Pyodide + lk-unlock. Всё self-hosted: ./pyodide/, ./vendor/, ./gen/. */
+/* Web Worker: Pyodide + lk-unlock. All self-hosted: ./pyodide/, ./vendor/, ./gen/. */
 importScripts("./pyodide/pyodide.js");
 importScripts("./gen/pyfiles.js");
 
@@ -8,14 +8,14 @@ const pyLog = (...a) => self.postMessage({type: "log", message: a.join(" ")});
 
 async function ensurePyodide() {
   if (pyodide) return;
-  pyLog("loadPyodide…");
+  pyLog("loadPyodide...");
   pyodide = await loadPyodide({indexURL: "./pyodide/"});
   await pyodide.loadPackage("micropip");
   const micropip = pyodide.pyimport("micropip");
   const vinfo = await (await fetch("./gen/vendor.json")).json();
-  pyLog("Установка pyasn1 (локальный wheel)…");
+  pyLog("Installing pyasn1 (local wheel)...");
   await micropip.install("./vendor/" + vinfo.wheel);
-  pyLog("Монтирование Python-исходников в FS…");
+  pyLog("Mounting Python sources into FS...");
   const FS = pyodide.FS;
   for (const [path, content] of Object.entries(self.__PYFILES__)) {
     const full = "/app/" + path;
@@ -25,7 +25,7 @@ async function ensurePyodide() {
   pyodide.runPython(`
 import sys
 sys.path.insert(0, "/app")
-import patcher_web   # shim lk_unlock.keys ставится ДО импорта patcher
+import patcher_web   # lk_unlock.keys shim is installed BEFORE importing patcher
 `);
   pw = pyodide.pyimport("patcher_web");
 }
@@ -38,21 +38,42 @@ async function genJwk() {
   return await crypto.subtle.exportKey("jwk", kp.privateKey);
 }
 
-async function ensureKey(jwk) {
+/**
+ * Ensure a key is loaded in the Python side.
+ * @param {object|null} jwk   - JWK object (from WebCrypto or localStorage)
+ * @param {string|null} pem   - PKCS#1 PEM text (from file import)
+ * @returns {object} the active JWK (for localStorage)
+ */
+async function ensureKey(jwk, pem) {
   await ensurePyodide();
-  if (!hasKey || jwk) {
-    pw.set_key_json(JSON.stringify(jwk || await genJwk()));
+
+  if (pem) {
+    const jwkStr = pw.parse_private_pem(pem);
+    pw.set_key_json(jwkStr);
     hasKey = true;
-    pyLog(jwk ? "Использован внешний/тестовый ключ."
-              : "Сгенерирована новая RSA-2048 пара (WebCrypto).");
+    pyLog("Imported key from PEM (PKCS#1).");
+    return JSON.parse(jwkStr);
   }
+
+  if (!hasKey || jwk) {
+    const key = jwk || await genJwk();
+    const jwkStr = JSON.stringify(key);
+    pw.set_key_json(jwkStr);
+    hasKey = true;
+    pyLog(jwk ? "Using external/test key."
+              : "Generated a new RSA-2048 pair (WebCrypto).");
+    return key;
+  }
+
+  return JSON.parse(pw.get_jwk());
 }
 
 async function handle(msg) {
   switch (msg.type) {
-    case "init":
-      await ensureKey(msg.jwk || null);
-      return {type: "ready"};
+    case "init": {
+      const jwk = await ensureKey(msg.jwk || null, msg.pem || null);
+      return {type: "ready", jwk: jwk};
+    }
     case "patch": {
       await ensureKey(msg.jwk || null);
       pyodide.FS.writeFile("/tmp/lk_in.img", new Uint8Array(msg.buf));
@@ -70,6 +91,9 @@ async function handle(msg) {
     case "pem":
       await ensureKey(null);
       return {type: "result", pem: pw.private_pem()};
+    case "get_jwk":
+      await ensurePyodide();
+      return {type: "result", jwk: JSON.parse(pw.get_jwk())};
   }
   throw new Error("unknown message type: " + msg.type);
 }

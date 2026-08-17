@@ -142,6 +142,14 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
 .s-row{display:flex;justify-content:space-between;margin-top:10px;
   font:12px var(--mono);color:var(--muted)}
 
+/* ---------- key status badge (card 1) ---------- */
+.key-badge{display:flex;align-items:center;gap:8px;font:11.5px var(--mono);
+  color:var(--muted);padding:6px 12px;border:1px solid var(--border);
+  border-radius:999px;background:rgba(255,255,255,.025);margin:10px 0 14px;width:fit-content}
+.key-badge .dot{width:7px;height:7px;border-radius:50%;background:#f5a623;
+  box-shadow:0 0 10px #f5a623;animation:pulse 1.4s ease-in-out infinite;transition:.4s}
+.key-badge.active .dot{animation:none}
+
 /* ---------- адаптив / доступность ---------- */
 @media(max-width:880px){
   .grid{grid-template-columns:1fr}
@@ -207,6 +215,18 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
       </label>
       <input type="file" id="lkfile" accept=".img,.bin,application/octet-stream" hidden>
       <div class="meta" id="fileMeta"><span>Файл не выбран</span><span></span></div>
+
+      <!-- Key management: import / export / status -->
+      <div class="row" style="margin-bottom:0">
+        <button id="btnImport" class="btn ghost" style="flex:1" disabled>Загрузить ключ (private.pem)</button>
+        <button id="btnExport" class="btn ghost" style="flex:1" disabled>Сохранить ключ (private.pem)</button>
+      </div>
+      <input type="file" id="pemfile" accept=".pem,application/x-pem-file,text/plain" hidden>
+      <div class="key-badge" id="keyStatus">
+        <span class="dot"></span>
+        <span id="keyStatusText">Ключ: ожидание инициализации…</span>
+      </div>
+
       <div class="row">
         <button id="btnPatch" class="btn primary" disabled>Патчить → lk_patched.img</button>
         <button id="btnPem" class="btn ghost" disabled>Скачать private.pem</button>
@@ -273,14 +293,19 @@ worker.onmessage=e=>{
 };
 worker.onerror=e=>log('worker: '+e.message);
 
-/* ============ контракт lkUnlock (без изменений) ============ */
+/* ============ контракт lkUnlock (расширен, старый API сохранён) ============ */
 const state={ready:false,buf:null,pem:null,busy:null};
 window.lkUnlock={
   ready:()=>state.ready,
+  // Original API (parity-test compatible)
   init:jwk=>rpc('init',{jwk}),
   patchBuffer:(buf,jwk)=>(jwk?window.lkUnlock.init(jwk):Promise.resolve())
       .then(()=>rpc('patch',{buf},[buf])),
   signToken:text=>rpc('sign',{token:text}),
+  // Extended API for key management
+  importPem:pemText=>rpc('init',{pem:pemText}),
+  getPem:()=>rpc('pem'),
+  getJwk:()=>rpc('get_jwk'),
 };
 
 /* ================= утилита сохранения ================= */
@@ -292,12 +317,65 @@ function saveBlob(data,name){
 }
 
 /* ================= UI-состояние ================= */
-const els={patch:$('#btnPatch'),pem:$('#btnPem'),sign:$('#btnSign'),token:$('#token'),
-  drop:$('#drop'),meta:$('#fileMeta'),badge:$('#badge'),badgeText:$('#badgeText')};
+const els={
+  patch:$('#btnPatch'),
+  pem:$('#btnPem'),
+  sign:$('#btnSign'),
+  token:$('#token'),
+  drop:$('#drop'),
+  meta:$('#fileMeta'),
+  badge:$('#badge'),
+  badgeText:$('#badgeText'),
+  importBtn:$('#btnImport'),
+  exportBtn:$('#btnExport'),
+  pemFile:$('#pemfile'),
+  keyStatus:$('#keyStatus'),
+  keyStatusText:$('#keyStatusText'),
+  keyDot:null,
+};
+els.keyDot = els.keyStatus.querySelector('.dot');
+
+function setKeyStatus(source){
+  els.keyStatus.classList.remove('active');
+  if(source==='local'){
+    els.keyDot.style.background='#22d07a';
+    els.keyDot.style.boxShadow='0 0 10px #22d07a';
+    els.keyStatusText.textContent='Ключ: локальный (localStorage)';
+    els.keyStatus.classList.add('active');
+  }else if(source==='imported'){
+    els.keyDot.style.background='#00d4ff';
+    els.keyDot.style.boxShadow='0 0 10px #00d4ff';
+    els.keyStatusText.textContent='Ключ: импортирован из файла';
+    els.keyStatus.classList.add('active');
+  }else if(source==='new'){
+    els.keyDot.style.background='#7c5cff';
+    els.keyDot.style.boxShadow='0 0 10px #7c5cff';
+    els.keyStatusText.textContent='Ключ: новый (сгенерирован)';
+    els.keyStatus.classList.add('active');
+  }else{
+    els.keyDot.style.background='#f5a623';
+    els.keyDot.style.boxShadow='0 0 10px #f5a623';
+    els.keyStatusText.textContent='Ключ: ожидание инициализации…';
+  }
+}
+
+function saveJwk(jwk){
+  try{localStorage.setItem('lk-unlock-jwk',JSON.stringify(jwk));}
+  catch(e){log('localStorage недоступен: '+e.message);}
+}
+function loadJwk(){
+  try{
+    const s=localStorage.getItem('lk-unlock-jwk');
+    return s?JSON.parse(s):null;
+  }catch(e){return null;}
+}
+
 function sync(){
   els.patch.disabled=!state.ready||!state.buf||!!state.busy;
   els.pem.disabled=!state.ready||!!state.busy;
   els.sign.disabled=!state.ready||!els.token.value.trim()||!!state.busy;
+  els.importBtn.disabled=!state.ready||!!state.busy;
+  els.exportBtn.disabled=!state.ready||!!state.busy;
 }
 els.token.addEventListener('input',sync);
 
@@ -322,6 +400,32 @@ $('#lkfile').addEventListener('change',e=>onFile(e.target.files[0]));
 ['dragenter','dragover'].forEach(t=>els.drop.addEventListener(t,e=>{e.preventDefault();els.drop.classList.add('drag');}));
 ['dragleave','drop'].forEach(t=>els.drop.addEventListener(t,e=>{e.preventDefault();els.drop.classList.remove('drag');}));
 els.drop.addEventListener('drop',e=>onFile(e.dataTransfer.files[0]));
+
+/* ================= key import / export ================= */
+els.importBtn.onclick=()=>els.pemFile.click();
+els.pemFile.addEventListener('change',e=>{
+  const f=e.target.files[0];
+  if(!f)return;
+  busy(els.importBtn,async()=>{
+    log('Импорт ключа из '+f.name+'…');
+    const text=await f.text();
+    const r=await window.lkUnlock.importPem(text);
+    if(r&&r.jwk){
+      saveJwk(r.jwk);
+      setKeyStatus('imported');
+      log('Ключ импортирован и сохранён в localStorage.');
+    }
+  });
+  els.pemFile.value='';
+});
+
+els.exportBtn.onclick=()=>busy(els.exportBtn,async()=>{
+  log('Экспорт private.pem…');
+  const r=await window.lkUnlock.getPem();
+  const pem=typeof r==='string'?r:(r&&r.pem);
+  saveBlob(new TextEncoder().encode(pem),'private.pem');
+  log('private.pem сохранён на диск.');
+});
 
 /* ================= действия ================= */
 els.patch.onclick=()=>busy(els.patch,async()=>{
@@ -366,25 +470,36 @@ function finishSplash(){
 
 /* ================= старт: ключ + init ================= */
 (async function boot(){
-  let jwk;
-  try{
-    /* ВАЖНО: worker ожидает RSA-2048 (RSASSA-PKCS1-v1_5), не ECDSA. */
-    const pair=await crypto.subtle.generateKey(
-      {name:'RSASSA-PKCS1-v1_5',modulusLength:2048,
-       publicExponent:new Uint8Array([1,0,1]),hash:'SHA-256'},
-      true,['sign','verify']);
-    jwk=await crypto.subtle.exportKey('jwk',pair.privateKey); // ключ живёт только локально
-  }catch(e){sStat.textContent='Ошибка WebCrypto (нужен HTTPS или localhost)';return;}
-  for(let i=1;i<=60&&!state.ready;i++){
-    try{await window.lkUnlock.init(jwk);onReady();}
-    catch(e){await sleep(1200);} // Pyodide ещё грузится — ждём и повторяем
+  let jwk=null,source='new';
+
+  const stored=loadJwk();
+  if(stored&&stored.kty==='RSA'){
+    jwk=stored;
+    source='local';
+    log('Ключ восстановлен из localStorage.');
   }
-  if(!state.ready)sStat.textContent='Не удалось связаться с worker.js';
+
+  for(let i=1;i<=60&&!state.ready;i++){
+    try{
+      const r=await window.lkUnlock.init(jwk);
+      if(r&&r.jwk){
+        saveJwk(r.jwk);
+        if(!stored)source='new';
+      }
+      onReady(source);
+      return;
+    }catch(e){
+      await sleep(1200);
+    }
+  }
+  sStat.textContent='Не удалось связаться с worker.js';
 })();
-function onReady(){
+
+function onReady(source){
   state.ready=true;
   els.badge.classList.add('on');els.badgeText.textContent='Pyodide готов';
-  log('Ядро загружено. Можно начинать.');
+  setKeyStatus(source);
+  log('Ядро загружено. Можно начинать. (ключ: '+source+')');
   finishSplash();sync();
 }
 

@@ -251,6 +251,75 @@ def private_pem() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Parse PKCS#1 "BEGIN RSA PRIVATE KEY" PEM -> JWK (for import from file)
+# ---------------------------------------------------------------------------
+def parse_private_pem(pem_text: str) -> str:
+    """Parse PKCS#1 'BEGIN RSA PRIVATE KEY' PEM and return JWK as JSON string.
+
+    Uses pyasn1 to decode the DER payload of the PEM block, extracts
+    n, e, d, p, q, dp, dq, qi and packs them into a standard RSA JWK
+    (base64url UInt, RFC 7518) compatible with WebCrypto.
+    """
+    from pyasn1.codec.der import decoder as der_dec
+    from pyasn1.type import namedtype, univ
+
+    m = re.search(r"-----BEGIN ([A-Z0-9 ]+)-----([\s\S]*?)-----END \1-----", pem_text)
+    if not m:
+        raise ValueError("no PEM block found")
+    label = m.group(1).strip().upper()
+    if label != "RSA PRIVATE KEY":
+        raise ValueError(
+            f"expected PKCS#1 'RSA PRIVATE KEY', got '{label}'. "
+            "Only PKCS#1 private keys are supported (not PKCS#8 / 'PRIVATE KEY')."
+        )
+    der = base64.b64decode("".join(m.group(2).split()))
+
+    class RSAPrivateKey(univ.Sequence):
+        componentType = namedtype.NamedTypes(
+            namedtype.NamedType("version", univ.Integer()),
+            namedtype.NamedType("modulus", univ.Integer()),
+            namedtype.NamedType("publicExponent", univ.Integer()),
+            namedtype.NamedType("privateExponent", univ.Integer()),
+            namedtype.NamedType("prime1", univ.Integer()),
+            namedtype.NamedType("prime2", univ.Integer()),
+            namedtype.NamedType("exponent1", univ.Integer()),
+            namedtype.NamedType("exponent2", univ.Integer()),
+            namedtype.NamedType("coefficient", univ.Integer()),
+        )
+
+    rk, _ = der_dec.decode(der, asn1Spec=RSAPrivateKey())
+
+    def to_b64u(i: int) -> str:
+        # RFC 7518 Base64urlUInt: big-endian, minimal length, no leading zeros
+        bl = max(1, (i.bit_length() + 7) // 8)
+        return base64.urlsafe_b64encode(i.to_bytes(bl, "big")).decode().rstrip("=")
+
+    jwk = {
+        "kty": "RSA",
+        "n": to_b64u(int(rk["modulus"])),
+        "e": to_b64u(int(rk["publicExponent"])),
+        "d": to_b64u(int(rk["privateExponent"])),
+        "p": to_b64u(int(rk["prime1"])),
+        "q": to_b64u(int(rk["prime2"])),
+        "dp": to_b64u(int(rk["exponent1"])),
+        "dq": to_b64u(int(rk["exponent2"])),
+        "qi": to_b64u(int(rk["coefficient"])),
+        "key_ops": ["sign"],
+        "ext": True,
+    }
+    return json.dumps(jwk)
+
+
+# ---------------------------------------------------------------------------
+# Get current JWK (for saving to localStorage from the UI)
+# ---------------------------------------------------------------------------
+def get_jwk() -> str:
+    """Return current private key as JWK JSON string."""
+    assert _KEY is not None, "key not set: call set_key_json(...) first"
+    return json.dumps(_KEY)
+
+
+# ---------------------------------------------------------------------------
 # SHIM 1: lk_unlock.keys — installed BEFORE importing patcher/signer
 # ---------------------------------------------------------------------------
 def _shim_get_keys(key_dir=None):
