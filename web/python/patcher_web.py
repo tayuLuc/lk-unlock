@@ -357,6 +357,142 @@ def diagnose_file(data: bytes) -> str:
 
 
 # ---------------------------------------------------------------------------
+# UX 1: Parse and validate the MediaTek TLV unlock token
+# ---------------------------------------------------------------------------
+def parse_token(token_text: str) -> str:
+    """Parse the MediaTek unlock token (from `fastboot oem get_token`).
+
+    The token is base64 with a 0x55 prefix; the raw bytes embed the device
+    codename as an ASCII string (e.g. "fleur"). We validate base64 + prefix
+    and extract the device name by scanning the decoded bytes - robust to
+    the exact TLV layout, which varies across builds. Works on bytes only.
+    """
+    result = {"valid": False, "error": None, "device_name": None, "raw_length": 0}
+    cleaned = (token_text or "").strip().replace(" ", "")
+    if not cleaned:
+        result["error"] = "Пустой токен"
+        return json.dumps(result)
+    pad = 4 - (len(cleaned) % 4)
+    if pad != 4:
+        cleaned += "=" * pad
+    try:
+        data = base64.b64decode(cleaned, validate=True)
+    except Exception as e:
+        result["error"] = f"Невалидный Base64: {e}"
+        return json.dumps(result)
+    result["raw_length"] = len(data)
+    if not data:
+        result["error"] = "Токен пуст после декода"
+        return json.dumps(result)
+    if data[0] != 0x55:
+        result["error"] = f"Неверный префикс 0x{data[0]:02x} (ожидался 0x55)"
+        return json.dumps(result)
+    # Extract device codename: printable ASCII run of >=4 chars
+    best = ""
+    cur = []
+    for b in data[1:]:
+        if 32 <= b < 127:
+            cur.append(chr(b))
+        else:
+            if len(cur) >= 4:
+                best = "".join(cur)
+            cur = []
+    if len(cur) >= 4:
+        best = "".join(cur)
+    result["device_name"] = best or None
+    result["valid"] = True
+    return json.dumps(result)
+
+
+# ---------------------------------------------------------------------------
+# UX 2: Detect MIUI vs HyperOS from the build fingerprint
+# ---------------------------------------------------------------------------
+def detect_os(fingerprint: str) -> str:
+    """Detect MIUI/HyperOS from the build fingerprint.
+
+    Xiaomi changed naming: a fingerprint ending in /V816.* (MIUI 14 style)
+    can actually be HyperOS 1.0. V814/V816 prefixes map to MIUI 14 on
+    Android 13 but may be HyperOS. Returns JSON with os/version/warning.
+    """
+    result = {"os": "unknown", "version": "", "raw": fingerprint, "warning": None}
+    if not fingerprint:
+        return json.dumps(result)
+    m = re.search(r"/((?:OS\d|V\d+)\.[\d.]+)\.[A-Z]{3,6}", fingerprint)
+    if not m:
+        return json.dumps(result)
+    code = m.group(1)
+    if code.startswith("OS"):
+        result["os"] = "HyperOS"
+        result["version"] = code
+        result["warning"] = "Это HyperOS, НЕ MIUI — проверьте совместимость lk.img"
+    elif code.startswith("V816") or code.startswith("V814"):
+        result["os"] = "MIUI"
+        result["version"] = code
+        result["warning"] = "MIUI 14 (возможно HyperOS 1.0) — проверьте реальную ОС"
+    elif code.startswith("V13") or code.startswith("V12") or code.startswith("V14"):
+        result["os"] = "MIUI"
+        result["version"] = code
+    else:
+        result["os"] = "unknown"
+        result["version"] = code
+    return json.dumps(result)
+
+
+# ---------------------------------------------------------------------------
+# UX 3: Visual fingerprint of the public key (SHA-256 of SPKI)
+# ---------------------------------------------------------------------------
+def pem_fingerprint() -> str:
+    """Return a visual fingerprint of the PUBLIC key (not the private part).
+
+    Builds the RSA SPKI DER from n/e, hashes it with SHA-256, and returns a
+    MAC-like short string, a 5x5 color grid and an emoji string. Never hashes
+    the private key material; suitable for visual comparison between sessions.
+    """
+    from pyasn1.codec.der.encoder import encode as der_enc
+    from pyasn1.type import namedtype, univ
+
+    assert _KEY is not None, "key not set: call set_key_json(...) first"
+
+    class AlgId(univ.Sequence):
+        componentType = namedtype.NamedTypes(
+            namedtype.NamedType("algorithm", univ.ObjectIdentifier()),
+            namedtype.OptionalNamedType("parameters", univ.Any()),
+        )
+
+    class RsaPub(univ.Sequence):
+        componentType = namedtype.NamedTypes(
+            namedtype.NamedType("modulus", univ.Integer()),
+            namedtype.NamedType("publicExponent", univ.Integer()),
+        )
+
+    class SPKI(univ.Sequence):
+        componentType = namedtype.NamedTypes(
+            namedtype.NamedType("algorithm", AlgId()),
+            namedtype.NamedType("subjectPublicKey", univ.BitString()),
+        )
+
+    rsa = RsaPub()
+    rsa.setComponentByName("modulus", _jwk_int(_KEY["n"]))
+    rsa.setComponentByName("publicExponent", _jwk_int(_KEY["e"]))
+    rsa_der = der_enc(rsa)
+    alg = AlgId()
+    alg.setComponentByName("algorithm", univ.ObjectIdentifier((1, 2, 840, 113549, 1, 1, 1)))
+    alg.setComponentByName("parameters", univ.Null())
+    spki = SPKI()
+    spki.setComponentByName("algorithm", alg)
+    spki.setComponentByName("subjectPublicKey", univ.BitString(hexValue=rsa_der.hex()))
+    sha = hashlib.sha256(der_enc(spki)).digest()
+    short = ":".join(f"{b:02x}" for b in sha[:8])
+    grid = [f"hsl({(sha[i] * 1.4) % 360:.0f}, {50 + sha[i] % 50}%, 50%)" for i in range(25)]
+    pool = [
+        "🔐", "🔑", "🛡️", "⚡", "🌟", "💎", "🎯",
+        "🔥", "✨", "⚙️", "🔒", "🌐", "💫", "🎨", "🌈", "⭐",
+    ]
+    emoji = "".join(pool[b % len(pool)] for b in sha[:8])
+    return json.dumps({"spki_sha256": sha.hex(), "short": short, "grid": grid, "emoji": emoji})
+
+
+# ---------------------------------------------------------------------------
 # SHIM 1: lk_unlock.keys — installed BEFORE importing patcher/signer
 # ---------------------------------------------------------------------------
 def _shim_get_keys(key_dir=None):

@@ -99,6 +99,21 @@ async function handle(msg) {
       const r = JSON.parse(pw.diagnose_file(msg.buf));
       return {type: "result", ...r};
     }
+    case "parse_token": {
+      await ensurePyodide();
+      const r = JSON.parse(pw.parse_token(msg.token));
+      return {type: "result", ...r};
+    }
+    case "detect_os": {
+      await ensurePyodide();
+      const r = JSON.parse(pw.detect_os(msg.fingerprint));
+      return {type: "result", ...r};
+    }
+    case "pem_fingerprint": {
+      await ensureKey(msg.jwk || null);
+      const r = JSON.parse(pw.pem_fingerprint());
+      return {type: "result", ...r};
+    }
   }
   throw new Error("unknown message type: " + msg.type);
 }

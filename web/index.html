@@ -150,6 +150,27 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
   box-shadow:0 0 10px #f5a623;animation:pulse 1.4s ease-in-out infinite;transition:.4s}
 .key-badge.active .dot{animation:none}
 
+/* ---------- token validation checklist ---------- */
+.token-checklist{margin:12px 0;padding:12px;background:rgba(0,0,0,.25);
+  border-radius:10px;font:12px var(--mono)}
+.token-checklist-item{display:flex;align-items:center;gap:8px;margin:4px 0;color:var(--muted)}
+.token-checklist-item.ok{color:#22d07a}
+.token-checklist-item.err{color:#ef4444}
+
+/* ---------- OS warning banner ---------- */
+.os-warning{margin:12px 0;padding:12px 14px;background:rgba(245,166,35,.12);
+  border:1px solid rgba(245,166,35,.3);border-radius:10px;font:12.5px var(--sans);
+  color:#f5a623;display:none}
+.os-warning.show{display:block}
+.os-warning b{color:#fff}
+
+/* ---------- key fingerprint ---------- */
+.key-fingerprint{margin:12px 0;padding:12px;background:rgba(0,0,0,.25);border-radius:10px}
+.key-fingerprint-emoji{font:20px/1 var(--sans);margin-bottom:8px}
+.key-fingerprint-short{font:12px var(--mono);color:var(--muted);margin-bottom:8px;word-break:break-all}
+.key-fingerprint-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:3px;width:100px}
+.key-fingerprint-grid div{aspect-ratio:1;border-radius:3px}
+
 /* ---------- адаптив / доступность ---------- */
 @media(max-width:880px){
   .grid{grid-template-columns:1fr}
@@ -226,6 +247,11 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
         <span class="dot"></span>
         <span id="keyStatusText">Ключ: ожидание инициализации…</span>
       </div>
+      <div class="key-fingerprint" id="keyFingerprint" style="display:none">
+        <div class="key-fingerprint-emoji" id="keyFingerprintEmoji"></div>
+        <div class="key-fingerprint-short" id="keyFingerprintShort"></div>
+        <div class="key-fingerprint-grid" id="keyFingerprintGrid"></div>
+      </div>
 
       <div class="row">
         <button id="btnPatch" class="btn primary" disabled>Патчить → lk_patched.img</button>
@@ -240,6 +266,14 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
       <p class="c-desc">Вставьте токен, полученный от устройства — на выходе подпись signature.bin.</p>
       <label class="lbl" for="token">ТОКЕН (HEX / BASE64)</label>
       <textarea id="token" spellcheck="false" placeholder="Вставьте токен…"></textarea>
+      <div class="os-warning" id="osWarning">
+        <b id="osWarningTitle">Предупреждение:</b> <span id="osWarningText"></span>
+      </div>
+      <div class="token-checklist" id="tokenChecklist" style="display:none">
+        <div class="token-checklist-item" id="tokenBase64"><span>⏳</span><span>Base64</span></div>
+        <div class="token-checklist-item" id="tokenPrefix"><span>⏳</span><span>Префикс 0x55</span></div>
+        <div class="token-checklist-item" id="tokenDevice"><span>⏳</span><span>Устройство</span></div>
+      </div>
       <div class="row" style="margin-top:14px">
         <button id="btnSign" class="btn primary" disabled>Подписать → signature.bin</button>
       </div>
@@ -307,6 +341,9 @@ window.lkUnlock={
   getPem:()=>rpc('pem'),
   getJwk:()=>rpc('get_jwk'),
   diagnose:buf=>rpc('diagnose',{buf},[buf]),
+  parseToken:text=>rpc('parse_token',{token:text}),
+  detectOS:fingerprint=>rpc('detect_os',{fingerprint}),
+  pemFingerprint:jwk=>rpc('pem_fingerprint',{jwk}),
 };
 
 /* ================= утилита сохранения ================= */
@@ -333,6 +370,17 @@ const els={
   keyStatus:$('#keyStatus'),
   keyStatusText:$('#keyStatusText'),
   keyDot:null,
+  tokenChecklist:$('#tokenChecklist'),
+  tokenBase64:$('#tokenBase64'),
+  tokenPrefix:$('#tokenPrefix'),
+  tokenDevice:$('#tokenDevice'),
+  osWarning:$('#osWarning'),
+  osWarningTitle:$('#osWarningTitle'),
+  osWarningText:$('#osWarningText'),
+  keyFingerprint:$('#keyFingerprint'),
+  keyFingerprintEmoji:$('#keyFingerprintEmoji'),
+  keyFingerprintShort:$('#keyFingerprintShort'),
+  keyFingerprintGrid:$('#keyFingerprintGrid'),
 };
 els.keyDot = els.keyStatus.querySelector('.dot');
 
@@ -379,6 +427,38 @@ function sync(){
   els.exportBtn.disabled=!state.ready||!!state.busy;
 }
 els.token.addEventListener('input',sync);
+
+/* ================= токен: валидация + OS-детект ================= */
+let tokenTimer=null;
+function setCheck(item,ok,text){
+  const el=$(item);
+  el.classList.remove('ok','err');
+  if(ok){el.classList.add('ok');el.querySelectorAll('span')[0].textContent='✓';}
+  else{el.classList.add('err');el.querySelectorAll('span')[0].textContent='✗';}
+  if(text)el.querySelectorAll('span')[1].textContent=text;
+}
+function analyzeToken(){
+  if(!state.ready)return;
+  const val=els.token.value.trim();
+  if(!val){els.tokenChecklist.style.display='none';els.osWarning.classList.remove('show');return;}
+  els.tokenChecklist.style.display='block';
+  setCheck('#tokenBase64',false,'…');setCheck('#tokenPrefix',false,'…');setCheck('#tokenDevice',false,'…');
+  window.lkUnlock.parseToken(val).then(r=>{
+    const okB=r.valid!==false&&!r.error;
+    setCheck('#tokenBase64',okB,r.error||'Base64');
+    setCheck('#tokenPrefix',okB,r.error||'0x55');
+    const dev=r.device_name||'?';
+    setCheck('#tokenDevice',okB&&!!r.device_name,dev);
+    els.sign.disabled=!okB;
+    // OS-детект (показываем предупреждение если fingerprint введён)
+    const fp=els.fingerprint?els.fingerprint.value:'';
+    if(fp){window.lkUnlock.detectOS(fp).then(d=>{
+      if(d.warning){els.osWarningText.textContent=d.warning;els.osWarning.classList.add('show');}
+      else els.osWarning.classList.remove('show');
+    });}
+  }).catch(()=>{setCheck('#tokenBase64',false,'ошибка');setCheck('#tokenPrefix',false,'');setCheck('#tokenDevice',false,'');});
+}
+els.token.addEventListener('input',()=>{clearTimeout(tokenTimer);tokenTimer=setTimeout(analyzeToken,300);});
 
 function busy(btn,fn){
   state.busy=btn;const old=btn.textContent;
@@ -516,6 +596,19 @@ function onReady(source){
   setKeyStatus(source);
   log('Ядро загружено. Можно начинать. (ключ: '+source+')');
   finishSplash();sync();
+  showKeyFingerprint();
+}
+
+/* ================= отпечаток ключа ================= */
+async function showKeyFingerprint(){
+  if(!state.ready)return;
+  try{
+    const f=await window.lkUnlock.pemFingerprint();
+    els.keyFingerprint.style.display='block';
+    els.keyFingerprintEmoji.textContent=f.emoji;
+    els.keyFingerprintShort.textContent=f.short;
+    els.keyFingerprintGrid.innerHTML=f.grid.map(c=>`<div style="background:${c}"></div>`).join('');
+  }catch(e){/* ключ может быть не готов — игнор */}
 }
 
 /* «прожектор» на карточках */
