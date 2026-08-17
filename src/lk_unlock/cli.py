@@ -56,8 +56,10 @@ def _patch_and_save(
         print(f"[+] '{cat}': {count} patch(es) applied")
     if not any(results.values()):
         raise LkUnlockError("no patches could be applied - needles not found in image")
-    out = Path(output) if output else Path(img).with_name(
-        f"{Path(img).stem}_patched{Path(img).suffix}"
+    out = (
+        Path(output)
+        if output
+        else Path(img).with_name(f"{Path(img).stem}_patched{Path(img).suffix}")
     )
     _check_output_path(img, out)
     image.save(str(out))
