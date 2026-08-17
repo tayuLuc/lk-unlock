@@ -94,6 +94,11 @@ async function handle(msg) {
     case "get_jwk":
       await ensurePyodide();
       return {type: "result", jwk: JSON.parse(pw.get_jwk())};
+    case "diagnose": {
+      await ensurePyodide();
+      const r = JSON.parse(pw.diagnose_file(msg.buf));
+      return {type: "result", ...r};
+    }
   }
   throw new Error("unknown message type: " + msg.type);
 }

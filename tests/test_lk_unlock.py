@@ -174,3 +174,15 @@ def test_patch_and_save_rejects_same_output(tmp_path):
         pytest.skip("test lk.img not present")
     with pytest.raises(LkUnlockError):
         _patch_and_save(str(TEST_LK), str(TEST_LK), ["fastboot"])
+
+
+def test_lk_partition_selection_ab_slots():
+    from lk_unlock.patches import _lk_partitions
+
+    class FakeImage:
+        def __init__(self, parts):
+            self.partitions = parts
+
+    assert _lk_partitions(FakeImage({"lk": 1, "lk_main_dtb": 2})) == ["lk"]
+    assert _lk_partitions(FakeImage({"lk_a": 1, "lk_b": 2, "boot": 3})) == ["lk_a", "lk_b"]
+    assert _lk_partitions(FakeImage({"boot": 1, "super": 2})) == []

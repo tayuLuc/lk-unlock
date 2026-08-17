@@ -39,19 +39,31 @@ DEFAULT_PATCHES: dict[str, dict[str, str]] = {
 
 WARNING_CATEGORIES = ("dm_verity", "orange_state", "red_state")
 
+# A/B-capable devices name the LK partition lk_a / lk_b; legacy devices use
+# plain lk. Patch whichever exist.
+LK_PARTITION_NAMES = ("lk", "lk_a", "lk_b")
+
+
+def _lk_partitions(image: LkImage) -> list[str]:
+    return [name for name in LK_PARTITION_NAMES if name in image.partitions]
+
 
 def apply_patch_category(
     image: LkImage, category: str, patches: dict[str, str] | None = None
 ) -> int:
     """Apply one patch category to the image; returns the applied count."""
     recipes = patches or DEFAULT_PATCHES[category]
+    targets = _lk_partitions(image)
+    if not targets:
+        return 0
     applied = 0
     for needle, replacement in recipes.items():
-        try:
-            image.apply_patch(needle, replacement, partition="lk")
-            applied += 1
-        except NeedleNotFoundException:
-            continue  # needle not present in this image - skip
+        for part in targets:
+            try:
+                image.apply_patch(needle, replacement, partition=part)
+                applied += 1
+            except NeedleNotFoundException:
+                continue  # needle not present in this partition - skip
     return applied
 
 

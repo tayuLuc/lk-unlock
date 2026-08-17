@@ -319,6 +319,43 @@ def get_jwk() -> str:
     return json.dumps(_KEY)
 
 
+def diagnose_file(data: bytes) -> str:
+    """Pre-patch diagnostics: magic bytes, size, OEM key presence.
+
+    Runs read-only checks on the uploaded image so the UI can block a
+    patch that would brick the device (wrong format, already-patched,
+    foreign model). Returns a JSON summary.
+    """
+    result = {
+        "size": len(data),
+        "magic_ok": False,
+        "magic_hex": data[:4].hex(),
+        "has_oem_key": False,
+        "oem_key_offset": None,
+        "lk_partitions": [],
+    }
+    # MTK LK image header: magic at offset 0 (0x58881688), ext at 48 (0x58891689)
+    if len(data) >= 8:
+        magic = int.from_bytes(data[0:4], "little")
+        result["magic_ok"] = magic == 0x58881688
+    try:
+        from liblk.image import LkImage
+        image = LkImage(bytes(data))
+        result["lk_partitions"] = list(image.partitions.keys())
+    except Exception:
+        result["lk_partitions"] = []
+    try:
+        old_n = _load_xiaomi_pub().public_numbers().n
+        old_bytes = old_n.to_bytes(256, "big")
+        pos = data.find(old_bytes)
+        if pos != -1:
+            result["has_oem_key"] = True
+            result["oem_key_offset"] = pos
+    except Exception:
+        result["has_oem_key"] = False
+    return json.dumps(result)
+
+
 # ---------------------------------------------------------------------------
 # SHIM 1: lk_unlock.keys — installed BEFORE importing patcher/signer
 # ---------------------------------------------------------------------------

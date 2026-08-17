@@ -306,6 +306,7 @@ window.lkUnlock={
   importPem:pemText=>rpc('init',{pem:pemText}),
   getPem:()=>rpc('pem'),
   getJwk:()=>rpc('get_jwk'),
+  diagnose:buf=>rpc('diagnose',{buf},[buf]),
 };
 
 /* ================= утилита сохранения ================= */
@@ -395,7 +396,21 @@ async function onFile(f){
   els.meta.innerHTML=`<b>${esc(f.name)}</b><span>${(f.size/1048576).toFixed(2)} МБ</span>`;
   els.drop.classList.add('has');
   log('Файл выбран: '+f.name);
+  runDiag();
   sync();}
+
+async function runDiag(){
+  if(!state.ready||!state.buf)return;
+  try{
+    const d=await window.lkUnlock.diagnose(state.buf.slice(0));
+    const parts=d.lk_partitions&&d.lk_partitions.length?d.lk_partitions.join(','):'нет';
+    const key=d.has_oem_key?`да (0x${(d.oem_key_offset||0).toString(16)})`:'НЕТ';
+    const magic=d.magic_ok?'OK':'НЕВЕРНАЯ';
+    log(`Диагностика: magic=${magic} (${d.magic_hex}) · OEM-ключ: ${key} · разделы: ${parts}`);
+    const ok=d.magic_ok&&d.has_oem_key;
+    els.meta.innerHTML=`<b>${els.meta.querySelector('b').textContent}</b><span>${ok?'✅ образ распознан':'⚠️ проверьте образ'}</span>`;
+  }catch(e){log('Диагностика: ошибка '+e.message);}
+}
 $('#lkfile').addEventListener('change',e=>onFile(e.target.files[0]));
 ['dragenter','dragover'].forEach(t=>els.drop.addEventListener(t,e=>{e.preventDefault();els.drop.classList.add('drag');}));
 ['dragleave','drop'].forEach(t=>els.drop.addEventListener(t,e=>{e.preventDefault();els.drop.classList.remove('drag');}));
