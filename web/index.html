@@ -2401,12 +2401,6 @@ async function connectWs(url) {
     connectWsBtn.disabled=true; connectBtn.disabled=true;
     const url=wsUrlInput.value.trim();
     if(!url){ setStatus('Укажите URL ws://…','error'); isConnecting=false; connectWsBtn.disabled=false; connectBtn.disabled=false; return; }
-    // ws:// from an https page is blocked as mixed content — tell the user why.
-    if(location.protocol==='https:' && url.startsWith('ws://')){
-      setStatus('ws:// заблокирован на https-странице. Открой http://localhost копию или используй wss://','error');
-      log('ws:// на https-сайте — mixed content. Варианты: открыть локальную копию (http://localhost:8001) или wss://-мост.');
-      isConnecting=false; connectWsBtn.disabled=false; connectBtn.disabled=false; return;
-    }
     try{
       setStatus(t('webusb.wsConnecting'),'loading');
       const res=await connectAdbWs(url);
