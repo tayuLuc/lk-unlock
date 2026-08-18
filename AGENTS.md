@@ -50,11 +50,11 @@ Python CLI (PyInstaller binaries) **and** a self-hosted, fully-offline web app
   from `web/vendor/adb-daemon-browser.js` by `web/build.py`** (build-time
   only; runtime stays fully offline). Read-only getprop → auto-fills
   fingerprint. **Read-only only, NO flashing.**
-  - Canonical source is the `tayuLuc/ya-webadb` fork,
-    `libraries/adb-daemon-browser/src/index.js`; sync via
-    `scripts/sync-adb-module.sh`. See `notes/adb_websocket_howto.md` for
-    the full protocol notes (CNXN word, auth types, device-only features,
-    no `delayed_ack`, ws://localhost allowed on https).
+  - `web/vendor/adb-daemon-browser.js` is the **single source of truth**
+    (self-contained ESM, committed in this repo). See
+    `notes/adb_websocket_howto.md` for protocol notes (CNXN word, auth
+    types, device-only features, no `delayed_ack`, ws://localhost allowed
+    on https).
   - Two connectors: `connectAdb()` (WebUSB) and `connectAdbWs(url)`
     (WebSockify bridge, no WebUSB needed).
   - A big refactor plan exists in `notes/webusb_refactor_plan.md`

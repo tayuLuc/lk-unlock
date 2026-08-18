@@ -115,7 +115,6 @@ def step_adb_module():
     injected = (
         marker_start
         + "\n  // Inlined from vendor/adb-daemon-browser.js by web/build.py - do not edit.\n"
-        + "  // Sync source: scripts/sync-adb-module.sh (github.com/tayuLuc/ya-webadb)\n"
         + module_src.rstrip()
         + "\n\n"
     )

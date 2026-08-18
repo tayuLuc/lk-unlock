@@ -47,22 +47,19 @@ websockify (localhost:8000)  ── TCP ──▶  телефон adbd (192.168.
 
 ## Источники кода
 
-- **Канонический модуль** — форк `tayuLuc/ya-webadb`,
-  `libraries/adb-daemon-browser/src/index.js` (самодостаточный ESM).
-- На сайт попадает через `scripts/sync-adb-module.sh` (curl из форка) →
-  `web/vendor/adb-daemon-browser.js` → `web/build.py` встраивает в
-  `index.html` (стриппит `export { }`, делает классик-глобалы).
-- Раньше был inline-самописный модуль в `index.html` — теперь вендорится.
-- `libraries/adb-daemon-ws` — отдельный порт WS-бэкенда на API
-  библиотеки ya-webadb (для будущего, если перейдём на библиотеку).
+- **Единственный источник правды** — `web/vendor/adb-daemon-browser.js`
+  (самодостаточный ESM, живёт в этом репо). Правка модуля = правка этого
+  файла → `web/build.py` встраивает в `index.html` (стриппит `export { }`,
+  делает классик-глобалы) → commit → push на `uv-migration`.
+- Раньше был inline-самописный модуль в `index.html` и отдельный форк
+  `tayuLuc/ya-webadb` как промежуточный склад — оба упразднены, чтобы не
+  дублировать источник. Код основан на отладке (см. «Ключевые факты»).
 
 ## Обновление модуля
 
-```bash
-sh scripts/sync-adb-module.sh   # тянет из форка, diff, кладёт в web/vendor
-uv run python web/build.py     # встраивает в index.html
-# commit + push на uv-migration → CI + Pages
-```
+Правка `web/vendor/adb-daemon-browser.js` → `uv run python web/build.py` →
+commit + push на `uv-migration` → CI + Pages. Никаких внешних
+зависимостей.
 
 ## Проверка / отладка
 
