@@ -406,6 +406,10 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
         <button id="connectDeviceBtn" class="btn ghost" style="flex:1" data-i18n="webusb.connectPhone" data-i18n-title="webusb.connectAndroidPhone" title="Подключить Android-телефон через USB">🔌 Подключить телефон</button>
         <span id="deviceStatus" class="device-status" data-i18n="webusb.notConnected">Не подключено</span>
       </div>
+      <div class="webusb-row" style="margin-top:8px">
+        <input id="wsUrl" type="text" spellcheck="false" placeholder="ws://localhost:8000" style="flex:1;background:rgba(0,0,0,.35);border:1px solid var(--border);border-radius:12px;color:var(--text);font:12px var(--mono);padding:10px 12px" data-i18n-placeholder="webusb.wsPlaceholder">
+        <button id="connectWsBtn" class="btn ghost" data-i18n="webusb.connectWs">Подключить по WS</button>
+      </div>
       <div class="device-info" id="deviceInfo" style="display:none"></div>
       <div class="os-warning" id="osWarning">
         <b id="osWarningTitle" data-i18n="warning.prefix">Предупреждение:</b> <span id="osWarningText"></span>
@@ -473,6 +477,10 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
       'label.token': 'ТОКЕН (HEX / BASE64)',
       'label.fingerprint': 'FINGERPRINT (необязательно, для сверки ОС)',
       'webusb.connectPhone': '🔌 Подключить телефон',
+      'webusb.wsPlaceholder': 'ws://localhost:8000',
+      'webusb.connectWs': 'Подключить по WS',
+      'webusb.wsError': 'Ошибка WebSocket: {error}',
+      'webusb.wsConnecting': 'Подключение по WebSocket…',
       'warning.prefix': 'Предупреждение:',
 
       'faq.summary': 'Что такое токен и зачем подпись?',
@@ -1818,6 +1826,8 @@ async function showKeyFingerprint(){
   // handshake — diagnostics first, toggle OFF to silence the noise.
   let pktLogOn=true;
   const connectBtn=els.connectDeviceBtn, statusEl=els.deviceStatus, fpInput=els.fingerprint, infoEl=els.deviceInfo;
+  const wsUrlInput=$('#wsUrl'), connectWsBtn=$('#connectWsBtn');
+  let wsTransport=null;
 
   // ── Custom ADB-over-WebUSB implementation ─────────────────────────────
   // Ported from app.webadb.com's proven-working stack (custom connection +
@@ -1829,7 +1839,7 @@ async function showKeyFingerprint(){
   const ADB={
     CMD_CNXN:0x4e58434e, CMD_AUTH:0x48545541, CMD_OPEN:0x4e45504f,
     CMD_OKAY:0x59414b4f, CMD_CLSE:0x45534c43, CMD_WRTE:0x45545257,
-    AUTH_TOKEN:0, AUTH_SIGNATURE:1, AUTH_RSAPUBLICKEY:2,
+    AUTH_TOKEN:1, AUTH_SIGNATURE:2, AUTH_RSAPUBLICKEY:3,
     VERSION:0x01000001, MAX_PAYLOAD:1024*1024
   };
   // BigInt modular math for raw RSA (WebCrypto's RSASSA hashes the input,
@@ -1894,122 +1904,234 @@ async function showKeyFingerprint(){
       return {privateKey:pair.privateKey, publicKeyPayload:pubPayload};
     }
   };
-  // Low-level packet I/O with optional packet log.
+// Low-level packet I/O with optional packet log.
   const PKT_CMDS={0x4e58434e:'CNXN',0x48545541:'AUTH',0x4e45504f:'OPEN',0x59414b4f:'OKAY',0x45534c43:'CLSE',0x45545257:'WRTE',0x434e5953:'SYNC'};
-  const AUTH_TYPES={0:'TOKEN',1:'SIGNATURE',2:'PUBKEY'};
+  const AUTH_TYPES={1:'TOKEN',2:'SIGNATURE',3:'PUBKEY'};
   function pktCmd(c){ return PKT_CMDS[c]||'0x'+c.toString(16).toUpperCase().padStart(8,'0'); }
   function calculateChecksum(p){ let s=0; for(let i=0;i<p.length;i++) s=(s+p[i])&0xffffffff; return s>>>0; }
   function logPkt(dir,cmd,arg0,arg1,len){ if(pktLogOn) log(`<span class="pkt-${dir}">[${dir}]</span> ${pktCmd(cmd)} a0=${cmd===ADB.CMD_AUTH?(arg0+'('+(AUTH_TYPES[arg0]||'?')+')'):arg0} a1=${arg1} len=${len}`); }
-  async function sendPacket(device,outEp,cmd,arg0,arg1,payload=new Uint8Array()){
-    const h=new ArrayBuffer(24), v=new DataView(h);
-    v.setUint32(0,cmd,true); v.setUint32(4,arg0,true); v.setUint32(8,arg1,true);
-    v.setUint32(12,payload.length,true); v.setUint32(16,calculateChecksum(payload),true); v.setUint32(20,cmd^0xffffffff,true);
-    const packet=new Uint8Array(24+payload.length); packet.set(new Uint8Array(h),0); packet.set(payload,24);
-    logPkt('OUT',cmd,arg0,arg1,payload.length);
-    await device.transferOut(outEp,packet);
-  }
-  // Read ADB packets from a persistent JS buffer fed by large transferIn
-  // reads (16KB). This avoids the babble/overflow error of requesting
-  // exact header/payload sizes — the device may send header+payload in
-  // one USB transfer, and chunked reads would lose the excess bytes.
-  let usbReadBuf=new Uint8Array(0);
-  async function readPacket(device,inEp,timeoutMs=15000){
-    const withTimeout=p=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('USB read timeout')),timeoutMs))]);
-    async function fill(){
-      const res=await withTimeout(device.transferIn(inEp,16384));
-      if(res.status!=='ok') throw new Error('USB transfer error (status '+res.status+')');
-      const chunk=new Uint8Array(res.data.buffer,res.data.byteOffset,res.data.byteLength);
-      const merged=new Uint8Array(usbReadBuf.length+chunk.length); merged.set(usbReadBuf); merged.set(chunk,usbReadBuf.length); usbReadBuf=merged;
+
+  // ── Transport Abstraction (USB / WebSocket) ───────────────────────────
+  // Both transports expose send(bytes) + readBytes(count) + close(), so the
+  // packet layer, AUTH handshake and socket multiplexing are transport-agnostic.
+  class UsbTransport {
+    constructor(device, inEp, outEp) {
+      this.device = device; this.inEp = inEp; this.outEp = outEp;
+      this.buf = new Uint8Array(0); this.closed = false;
     }
-    while(usbReadBuf.length<24) await fill();
-    const v=new DataView(usbReadBuf.buffer,usbReadBuf.byteOffset,24);
-    const cmd=v.getUint32(0,true), arg0=v.getUint32(4,true), arg1=v.getUint32(8,true), len=v.getUint32(12,true);
-    while(usbReadBuf.length<24+len) await fill();
-    const payload=usbReadBuf.slice(24,24+len);
-    usbReadBuf=usbReadBuf.slice(24+len);
-    logPkt('IN',cmd,arg0,arg1,len);
-    return {cmd,arg0,arg1,payload};
-  }
-  const CNXN_FEATURES='shell_v2,cmd,stat_v2,ls_v2,fixed_push_mkdir,apex,abb,fixed_push_symlink_timestamp,abb_exec,remount_shell,track_app,sendrecv_v2,sendrecv_v2_brotli,sendrecv_v2_lz4,sendrecv_v2_zstd,sendrecv_v2_dry_run_send';
-  // AUTH handshake: token → signatures with known keys → public key.
-  async function authenticate(device,inEp,outEp,firstPacket){
-    let packet=firstPacket||await readPacket(device,inEp);
-    if(packet.cmd===ADB.CMD_CNXN) return packet.payload; // already authorized
-    if(packet.cmd!==ADB.CMD_AUTH||packet.arg0!==ADB.AUTH_TOKEN) throw new Error('Expected AUTH TOKEN');
-    let token=packet.payload;
-    const keys=await KeyStore.iterateKeys();
-    for(const key of keys){
-      const sig=await signToken(key.privateKey,token);
-      await sendPacket(device,outEp,ADB.CMD_AUTH,ADB.AUTH_SIGNATURE,0,sig);
-      packet=await readPacket(device,inEp);
-      if(packet.cmd===ADB.CMD_CNXN) return packet.payload;
-      if(packet.cmd===ADB.CMD_AUTH&&packet.arg0===ADB.AUTH_TOKEN){ token=packet.payload; continue; }
-      throw new Error('Unexpected AUTH response');
+    async send(bytes) {
+      if (this.closed) throw new Error('Transport closed');
+      return await this.device.transferOut(this.outEp, bytes);
     }
-    const fresh=await KeyStore.generateKey();
-    await sendPacket(device,outEp,ADB.CMD_AUTH,ADB.AUTH_RSAPUBLICKEY,0,fresh.publicKeyPayload);
-    packet=await readPacket(device,inEp);
-    if(packet.cmd===ADB.CMD_CNXN) return packet.payload;
-    throw new Error('Auth failed or rejected');
+    async readBytes(count, timeoutMs = 15000) {
+      if (this.closed) throw new Error('Transport closed');
+      const withTimeout = p => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('USB read timeout')), timeoutMs))]);
+      while (this.buf.length < count) {
+        const res = await withTimeout(this.device.transferIn(this.inEp, 16384));
+        if (res.status !== 'ok') throw new Error('USB transfer error (status ' + res.status + ')');
+        const chunk = new Uint8Array(res.data.buffer, res.data.byteOffset, res.data.byteLength);
+        const merged = new Uint8Array(this.buf.length + chunk.length);
+        merged.set(this.buf); merged.set(chunk, this.buf.length);
+        this.buf = merged;
+      }
+      const res = this.buf.slice(0, count);
+      this.buf = this.buf.slice(count);
+      return res;
+    }
+    async close() {
+      this.closed = true;
+      try { await this.device.close(); } catch(_) {}
+    }
   }
-  // Socket multiplexing (OPEN/OKAY/WRTE/CLSE) — minimal for getprop.
-  class AdbSocket{
-    constructor(daemon,localId){ this.daemon=daemon; this.localId=localId; this.remoteId=0; this.chunks=[]; this.closed=false;
-      this.connectedPromise=new Promise((res,rej)=>{this._resolveConnected=res; this._rejectConnected=rej;}); }
-    _onOkay(remoteId){ this.remoteId=remoteId; this._resolveConnected(); }
-    _onData(data){ this.chunks.push(data); }
-    _onClose(){ this.closed=true; }
-    async read(){
-      if(this.chunks.length) return this.chunks.shift();
-      if(this.closed) return null;
-      // Wait for the next write/close by polling the internal queue.
-      return new Promise((resolve,reject)=>{
-        const timer=setInterval(()=>{
-          if(this.chunks.length){ clearInterval(timer); resolve(this.chunks.shift()); }
-          else if(this.closed){ clearInterval(timer); resolve(null); }
-        },20);
+
+  class WsTransport {
+    constructor(url) {
+      this.url = url; this.ws = null; this.buf = new Uint8Array(0);
+      this.pendingReads = []; this.closed = false;
+    }
+    async connect() {
+      this.ws = new WebSocket(this.url);
+      this.ws.binaryType = 'arraybuffer';
+      await new Promise((resolve, reject) => {
+        this.ws.onopen = resolve;
+        this.ws.onerror = () => reject(new Error('WebSocket connect failed'));
+      });
+      this.ws.onmessage = (e) => {
+        const chunk = new Uint8Array(e.data);
+        const merged = new Uint8Array(this.buf.length + chunk.length);
+        merged.set(this.buf); merged.set(chunk, this.buf.length);
+        this.buf = merged;
+        this._processReads();
+      };
+      this.ws.onclose = () => this.close();
+    }
+    _processReads() {
+      while (this.pendingReads.length > 0 && this.buf.length >= this.pendingReads[0].count) {
+        const req = this.pendingReads.shift();
+        clearTimeout(req.timer);
+        const res = this.buf.slice(0, req.count);
+        this.buf = this.buf.slice(req.count);
+        req.resolve(res);
+      }
+    }
+    async send(bytes) {
+      if (this.closed) throw new Error('Transport closed');
+      this.ws.send(bytes);
+    }
+    async readBytes(count, timeoutMs = 15000) {
+      if (this.closed) throw new Error('Transport closed');
+      if (this.buf.length >= count) {
+        const res = this.buf.slice(0, count);
+        this.buf = this.buf.slice(count);
+        return res;
+      }
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.pendingReads = this.pendingReads.filter(r => r.resolve !== resolve);
+          reject(new Error('WS read timeout'));
+        }, timeoutMs);
+        this.pendingReads.push({ count, resolve, reject, timer });
       });
     }
-    async write(data){ if(typeof data==='string') data=new TextEncoder().encode(data); await sendPacket(this.daemon.device,this.daemon.outEp,ADB.CMD_WRTE,this.localId,this.remoteId,data); }
-    async close(){ if(!this.closed){ await sendPacket(this.daemon.device,this.daemon.outEp,ADB.CMD_CLSE,this.localId,this.remoteId); this.closed=true; this.daemon.sockets.delete(this.localId); } }
-  }
-  class AdbDaemon{
-    constructor(device,inEp,outEp){ this.device=device; this.inEp=inEp; this.outEp=outEp; this.sockets=new Map(); this.nextLocalId=1; this._readLoop(); }
-    async _readLoop(){
-      try{
-        for(;;){
-          const pkt=await readPacket(this.device,this.inEp);
-          if(pkt.cmd===ADB.CMD_OKAY){ const s=this.sockets.get(pkt.arg0); if(s) s._onOkay(pkt.arg1); }
-          else if(pkt.cmd===ADB.CMD_WRTE){ const s=this.sockets.get(pkt.arg0); if(s){ s._onData(pkt.payload); sendPacket(this.device,this.outEp,ADB.CMD_OKAY,s.remoteId,pkt.arg0).catch(()=>{}); } }
-          else if(pkt.cmd===ADB.CMD_CLSE){ const s=this.sockets.get(pkt.arg0); if(s){ s._onClose(); sendPacket(this.device,this.outEp,ADB.CMD_CLSE,s.remoteId,pkt.arg0).catch(()=>{}); this.sockets.delete(pkt.arg0); } }
-        }
-      }catch(e){ if(!this.closed) console.error('Read loop error:',e); }
+    async close() {
+      if (this.closed) return;
+      this.closed = true;
+      if (this.ws) this.ws.close();
+      this.pendingReads.forEach(r => { clearTimeout(r.timer); r.reject(new Error('Transport closed')); });
+      this.pendingReads = [];
     }
-    async close(){ this.closed=true; try{ await this.device.close(); }catch(_){} }
-    async open(destination){
-      const localId=this.nextLocalId++;
-      const socket=new AdbSocket(this,localId);
-      this.sockets.set(localId,socket);
-      await sendPacket(this.device,this.outEp,ADB.CMD_OPEN,localId,0,new TextEncoder().encode(destination+'\0'));
+  }
+
+  // Refactored packet I/O — takes a transport, not (device, inEp, outEp).
+  async function sendPacket(transport, cmd, arg0, arg1, payload = new Uint8Array()) {
+    const h = new ArrayBuffer(24), v = new DataView(h);
+    v.setUint32(0, cmd, true); v.setUint32(4, arg0, true); v.setUint32(8, arg1, true);
+    v.setUint32(12, payload.length, true); v.setUint32(16, calculateChecksum(payload), true); v.setUint32(20, cmd ^ 0xffffffff, true);
+    const packet = new Uint8Array(24 + payload.length); packet.set(new Uint8Array(h), 0); packet.set(payload, 24);
+    logPkt('OUT', cmd, arg0, arg1, payload.length);
+    return await transport.send(packet);
+  }
+
+  async function readPacket(transport, timeoutMs = 15000) {
+    const header = await transport.readBytes(24, timeoutMs);
+    const v = new DataView(header.buffer, header.byteOffset, 24);
+    const cmd = v.getUint32(0, true), arg0 = v.getUint32(4, true), arg1 = v.getUint32(8, true), len = v.getUint32(12, true);
+    const payload = len > 0 ? await transport.readBytes(len, timeoutMs) : new Uint8Array(0);
+    logPkt('IN', cmd, arg0, arg1, len);
+    return { cmd, arg0, arg1, payload };
+  }
+
+  const CNXN_FEATURES='shell_v2,cmd,stat_v2,ls_v2,fixed_push_mkdir,apex,abb,fixed_push_symlink_timestamp,abb_exec,remount_shell,track_app,sendrecv_v2,sendrecv_v2_brotli,sendrecv_v2_lz4,sendrecv_v2_zstd,sendrecv_v2_dry_run_send';
+
+  // AUTH handshake: token → signatures with known keys → public key.
+  async function authenticate(transport, firstPacket) {
+    let packet = firstPacket || await readPacket(transport);
+    if (packet.cmd === ADB.CMD_CNXN) return packet.payload; // already authorized
+    if (packet.cmd !== ADB.CMD_AUTH || packet.arg0 !== ADB.AUTH_TOKEN) throw new Error('Expected AUTH TOKEN');
+    let token = packet.payload;
+    const keys = await KeyStore.iterateKeys();
+    for (const key of keys) {
+      const sig = await signToken(key.privateKey, token);
+      await sendPacket(transport, ADB.CMD_AUTH, ADB.AUTH_SIGNATURE, 0, sig);
+      packet = await readPacket(transport);
+      if (packet.cmd === ADB.CMD_CNXN) return packet.payload;
+      if (packet.cmd === ADB.CMD_AUTH && packet.arg0 === ADB.AUTH_TOKEN) { token = packet.payload; continue; }
+      throw new Error('Unexpected AUTH response');
+    }
+    const fresh = await KeyStore.generateKey();
+    await sendPacket(transport, ADB.CMD_AUTH, ADB.AUTH_RSAPUBLICKEY, 0, fresh.publicKeyPayload);
+    packet = await readPacket(transport);
+    if (packet.cmd === ADB.CMD_CNXN) return packet.payload;
+    throw new Error('Auth failed or rejected');
+  }
+
+  // Socket multiplexing (OPEN/OKAY/WRTE/CLSE) — minimal for getprop.
+  class AdbSocket {
+    constructor(daemon, localId) {
+      this.daemon = daemon; this.localId = localId; this.remoteId = 0;
+      this.chunks = []; this.waitingReads = []; this.closed = false;
+      this.connectedPromise = new Promise((res, rej) => { this._resolveConnected = res; this._rejectConnected = rej; });
+    }
+    _onOkay(remoteId) { this.remoteId = remoteId; this._resolveConnected(); }
+    _onData(data) {
+      if (this.waitingReads.length > 0) this.waitingReads.shift().resolve(data);
+      else this.chunks.push(data);
+    }
+    _onClose() {
+      this.closed = true;
+      this.waitingReads.forEach(r => r.resolve(null));
+      this.waitingReads = [];
+    }
+    async read() {
+      if (this.chunks.length) return this.chunks.shift();
+      if (this.closed) return null;
+      return new Promise(resolve => { this.waitingReads.push({ resolve }); });
+    }
+    async write(data) {
+      if (typeof data === 'string') data = new TextEncoder().encode(data);
+      await sendPacket(this.daemon.transport, ADB.CMD_WRTE, this.localId, this.remoteId, data);
+    }
+    async close() {
+      if (!this.closed) {
+        await sendPacket(this.daemon.transport, ADB.CMD_CLSE, this.localId, this.remoteId);
+        this.closed = true; this.daemon.sockets.delete(this.localId);
+      }
+    }
+  }
+
+  class AdbDaemon {
+    constructor(transport) {
+      this.transport = transport; this.sockets = new Map(); this.nextLocalId = 1; this.closed = false;
+      this._readLoop();
+    }
+    async _readLoop() {
+      try {
+        for (;;) {
+          const pkt = await readPacket(this.transport);
+          if (pkt.cmd === ADB.CMD_OKAY) { const s = this.sockets.get(pkt.arg0); if (s) s._onOkay(pkt.arg1); }
+          else if (pkt.cmd === ADB.CMD_WRTE) { const s = this.sockets.get(pkt.arg0); if (s) { s._onData(pkt.payload); sendPacket(this.transport, ADB.CMD_OKAY, s.remoteId, pkt.arg0).catch(() => {}); } }
+          else if (pkt.cmd === ADB.CMD_CLSE) { const s = this.sockets.get(pkt.arg0); if (s) { s._onClose(); sendPacket(this.transport, ADB.CMD_CLSE, s.remoteId, pkt.arg0).catch(() => {}); this.sockets.delete(pkt.arg0); } }
+        }
+      } catch (e) {
+        if (!this.closed) {
+          console.error('Read loop error:', e);
+          this.sockets.forEach(s => s._onClose());
+        }
+      }
+    }
+    async close() {
+      this.closed = true;
+      this.sockets.forEach(s => s._onClose());
+      await this.transport.close();
+    }
+    async open(destination) {
+      const localId = this.nextLocalId++;
+      const socket = new AdbSocket(this, localId);
+      this.sockets.set(localId, socket);
+      await sendPacket(this.transport, ADB.CMD_OPEN, localId, 0, new TextEncoder().encode(destination + '\0'));
       await socket.connectedPromise;
       return socket;
     }
   }
-  class AdbConnection{
-    constructor(daemon){ this.daemon=daemon; this.serial=usbDevice.serialNumber||''; }
-    createSocket(destination){ return this.daemon.open(destination); }
-    async getProp(propName){
-      const socket=await this.createSocket('shell:getprop '+propName);
-      let out=''; let chunk;
-      while((chunk=await socket.read())!==null) out+=new TextDecoder().decode(chunk);
+
+  class AdbConnection {
+    constructor(daemon, name = '', serial = '') {
+      this.daemon = daemon; this.name = name; this.serial = serial;
+    }
+    createSocket(destination) { return this.daemon.open(destination); }
+    async getProp(propName) {
+      const socket = await this.createSocket('shell:getprop ' + propName);
+      let out = ''; let chunk;
+      while ((chunk = await socket.read()) !== null) out += new TextDecoder().decode(chunk);
       await socket.close();
       return out.trim();
     }
-    async close(){ await this.daemon.close(); }
+    async close() { await this.daemon.close(); }
   }
-  // Main entry: pick device, open, claim ADB interface, connect.
-  async function connectAdb(){
-    const device=await navigator.usb.requestDevice({filters:[{classCode:255,subclassCode:66,protocolCode:1}]});
+
+  // ── WebUSB connector (unchanged diagnostics, transport-based I/O) ─────
+  async function connectAdb() {
+    const device = await navigator.usb.requestDevice({filters:[{classCode:255,subclassCode:66,protocolCode:1}]});
     if(!device) return null;
     await device.open();
     // Full descriptor dump for diagnostics.
@@ -2056,20 +2178,15 @@ async function showKeyFingerprint(){
     }
     if(!inEp||!outEp) throw new Error('ADB endpoints not found (in='+(inEp?.endpointNumber||'-')+' out='+(outEp?.endpointNumber||'-')+')');
     log('Chosen: iface #'+iface.interfaceNumber+' alt '+alt.alternateSetting+' → IN ep '+inEp.endpointNumber+' ('+inEp.type+') OUT ep '+outEp.endpointNumber+' ('+outEp.type+')');
+    const transport = new UsbTransport(device, inEp.endpointNumber, outEp.endpointNumber);
     // Send CNXN, log the actual transferOut result.
     const cnxnPayload=new TextEncoder().encode('host::features='+CNXN_FEATURES+';');
-    const h=new ArrayBuffer(24), v=new DataView(h);
-    v.setUint32(0,ADB.CMD_CNXN,true); v.setUint32(4,ADB.VERSION,true); v.setUint32(8,ADB.MAX_PAYLOAD,true);
-    v.setUint32(12,cnxnPayload.length,true); v.setUint32(16,calculateChecksum(cnxnPayload),true); v.setUint32(20,ADB.CMD_CNXN^0xffffffff,true);
-    const cnxnPacket=new Uint8Array(24+cnxnPayload.length); cnxnPacket.set(new Uint8Array(h),0); cnxnPacket.set(cnxnPayload,24);
-    logPkt('OUT',ADB.CMD_CNXN,ADB.VERSION,ADB.MAX_PAYLOAD,cnxnPayload.length);
-    const outRes=await device.transferOut(outEp.endpointNumber,cnxnPacket);
+    const outRes=await sendPacket(transport, ADB.CMD_CNXN, ADB.VERSION, ADB.MAX_PAYLOAD, cnxnPayload);
     log('CNXN transferOut: status='+outRes.status+' bytes='+outRes.bytesWritten);
     // Read the first packet with full error detail.
     let firstPacket;
     try{
-      usbReadBuf=new Uint8Array(0);
-      firstPacket=await readPacket(device,inEp.endpointNumber);
+      firstPacket=await readPacket(transport);
     }catch(readErr){
       log('First read failed: '+readErr.message);
       // Retry once after a device reset (clears a stalled endpoint).
@@ -2077,17 +2194,27 @@ async function showKeyFingerprint(){
       try{
         if(!iface.claimed) await device.claimInterface(iface.interfaceNumber);
         await device.selectAlternateInterface(iface.interfaceNumber, alt.alternateSetting);
-        usbReadBuf=new Uint8Array(0);
-        const outRes2=await device.transferOut(outEp.endpointNumber,cnxnPacket);
+        const outRes2=await sendPacket(transport, ADB.CMD_CNXN, ADB.VERSION, ADB.MAX_PAYLOAD, cnxnPayload);
         log('CNXN transferOut(2): status='+outRes2.status+' bytes='+outRes2.bytesWritten);
-        firstPacket=await readPacket(device,inEp.endpointNumber);
+        firstPacket=await readPacket(transport);
       }catch(e2){
         log('Second read failed: '+e2.message);
         throw new Error('USB handshake failed: '+readErr.message+' / '+e2.message);
       }
     }
-    await authenticate(device,inEp.endpointNumber,outEp.endpointNumber,firstPacket);
-    return {connection:new AdbConnection(new AdbDaemon(device,inEp.endpointNumber,outEp.endpointNumber)), name:device.productName||device.serialNumber||'Android', raw:device};
+    await authenticate(transport, firstPacket);
+    return {connection:new AdbConnection(new AdbDaemon(transport), device.productName||device.serialNumber||'Android', device.serialNumber||''), name:device.productName||device.serialNumber||'Android', raw:device};
+  }
+
+  // ── WebSocket (WebSockify) connector — no WebUSB needed ───────────────
+  async function connectAdbWs(url) {
+    const transport = new WsTransport(url);
+    await transport.connect();
+    const cnxnPayload = new TextEncoder().encode('host::features=' + CNXN_FEATURES + ';');
+    await sendPacket(transport, ADB.CMD_CNXN, ADB.VERSION, ADB.MAX_PAYLOAD, cnxnPayload);
+    const firstPacket = await readPacket(transport);
+    await authenticate(transport, firstPacket);
+    return { connection: new AdbConnection(new AdbDaemon(transport), 'WebSocket Device', url), name: 'WebSocket Device', raw: transport };
   }
   $('#btnPkts').onclick=()=>{
     pktLogOn=!pktLogOn;
@@ -2172,7 +2299,7 @@ async function showKeyFingerprint(){
   async function disconnectDevice(keepClean){
     try{ adb&&await adb.close(); }catch(e){}
     try{ usbDevice&&await usbDevice.close(); }catch(_){}
-    adb=null; usbDevice=null;
+    adb=null; usbDevice=null; wsTransport=null;
     if(!keepClean) setStatus(t('webusb.disconnected'),'default');
   }
   // Physical USB unplug.
@@ -2182,6 +2309,30 @@ async function showKeyFingerprint(){
   });
   connectBtn.addEventListener('click',async()=>{
     if(adb) await disconnectDevice(); else await connectToDevice();
+  });
+  connectWsBtn.addEventListener('click',async()=>{
+    if(adb){ await disconnectDevice(); return; }
+    if(isConnecting) return;
+    isConnecting=true;
+    connectWsBtn.disabled=true; connectBtn.disabled=true;
+    const url=wsUrlInput.value.trim();
+    if(!url){ setStatus('Укажите URL ws://…','error'); isConnecting=false; connectWsBtn.disabled=false; connectBtn.disabled=false; return; }
+    try{
+      setStatus(t('webusb.wsConnecting'),'loading');
+      const res=await connectAdbWs(url);
+      wsTransport=res.raw;
+      adb=res.connection;
+      setStatus('✓ '+res.name,'connected');
+      await readDeviceProperties();
+    }catch(e){
+      console.error('WS connect error:',e);
+      await disconnectDevice(true);
+      setStatus(t('webusb.wsError',{error:e.message||e}),'error');
+    }finally{
+      isConnecting=false;
+      connectWsBtn.disabled=false;
+      connectBtn.disabled=false;
+    }
   });
   setStatus(t('webusb.notConnected'));
 })();
