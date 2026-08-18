@@ -2000,13 +2000,12 @@ class UsbTransport {
         if (this.closed) throw new Error('Transport closed');
         const withTimeout = p => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('USB read timeout')), timeoutMs))]);
         while (this.buf.length < count) {
-            // `stall` is transient (endpoint not yet ready, e.g. right after
-            // claim); retry the read instead of failing, like webadb does.
-            let res;
-            for (let attempt = 0; ; attempt++) {
-                res = await withTimeout(this.device.transferIn(this.inEp, 16384));
-                if (res.status === 'ok' || res.status !== 'stall' || attempt >= 3) break;
-            }
+            // Read exactly `count` (up to a chunk) — never request a huge
+            // buffer: some MediaTek/Xiaomi adbd stacks reset the USB bus
+            // (re-enumerate) on a 16KB transferIn when only a short packet
+            // is coming. webadb reads 24-byte header then payloadLength.
+            const want = Math.min(count - this.buf.length, 16384);
+            const res = await withTimeout(this.device.transferIn(this.inEp, want));
             if (res.status !== 'ok') throw new Error('USB transfer error (status ' + res.status + ')');
             const chunk = new Uint8Array(res.data.buffer, res.data.byteOffset, res.data.byteLength);
             const merged = new Uint8Array(this.buf.length + chunk.length);
@@ -2273,12 +2272,9 @@ async function connectWs(url) {
       if(msg.includes('claim')||msg.includes('in use')) throw new Error('USB_BLOCKED');
       throw claimErr;
     }
-    // Re-select the alternate ONLY if it differs from the active one.
-    // An unconditional selectAlternateInterface (even for alt 0) can reset
-    // the bulk endpoints on some devices (MIUI), making the first transferIn
-    // stall. Match webadb's conditional behavior.
-    if(iface.alternate?.alternateSetting!==alt.alternateSetting)
-      await device.selectAlternateInterface(iface.interfaceNumber, alt.alternateSetting);
+    // No selectAlternateInterface: ADB uses bulk endpoints (alt 0), and
+    // re-selecting an alternate can trigger side-effects / resets on some
+    // custom ROMs. webadb does not require it for bulk.
     let inEp=null, outEp=null;
     for(const ep of alt.endpoints){
       if(ep.direction==='in'&&!inEp) inEp=ep;
@@ -2292,6 +2288,9 @@ async function connectWs(url) {
     const cnxnPayload=new TextEncoder().encode('host::features='+CNXN_FEATURES);
     const outRes=await sendPacket(transport, ADB.CMD_CNXN, ADB.VERSION, ADB.MAX_PAYLOAD, cnxnPayload);
     log('CNXN transferOut: status='+outRes.status+' bytes='+outRes.bytesWritten);
+    // adbd on Xiaomi/MediaTek may need a few ms to initialize its response
+    // after CNXN before the in-endpoint delivers a packet.
+    await new Promise(r=>setTimeout(r,50));
     // Read the first packet with full error detail.
     let firstPacket;
     try{
@@ -2300,7 +2299,8 @@ async function connectWs(url) {
       log('First read failed: '+readErr.message);
       // Retry the read once WITHOUT device.reset() — reset drops the USB
       // connection on MIUI (subsequent claim fails with 'device was
-      // disconnected'). A stalled endpoint clears on a second transferIn.
+      // disconnected'). Wait a beat and read again.
+      await new Promise(r=>setTimeout(r,100));
       try{
         firstPacket=await readPacket(transport);
       }catch(e2){
