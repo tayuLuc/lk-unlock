@@ -1830,7 +1830,7 @@ async function showKeyFingerprint(){
     CMD_CNXN:0x4e58434e, CMD_AUTH:0x48545541, CMD_OPEN:0x4e45504f,
     CMD_OKAY:0x59414b4f, CMD_CLSE:0x45534c43, CMD_WRTE:0x45545257,
     AUTH_TOKEN:0, AUTH_SIGNATURE:1, AUTH_RSAPUBLICKEY:2,
-    VERSION:0x01000001, MAX_PAYLOAD:256*1024
+    VERSION:0x01000001, MAX_PAYLOAD:1024*1024
   };
   // BigInt modular math for raw RSA (WebCrypto's RSASSA hashes the input,
   // which would double-hash the ADB token).
