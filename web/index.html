@@ -1873,7 +1873,9 @@ async function showKeyFingerprint(){
       }catch(err){
         // Close the USB connection so the interface is released on auth
         // failure (otherwise it stays busy and reconnect errors out).
-        try{ await connection.close(); }catch(_){}
+        // Note: AdbDaemonWebUsbConnection has no close() — closing the
+        // writable triggers the duplex close handler (device.raw.close()).
+        try{ await connection.writable.close(); }catch(_){}
         connection=null;
         transport=null;
         if(err.message==='AUTH_TIMEOUT') throw new Error(t('webusb.timeout'));
@@ -1927,7 +1929,7 @@ async function showKeyFingerprint(){
   // keepClean=false lets the caller show an error status afterwards.
   async function disconnectDevice(keepClean){
     try{ transport&&await transport.close(); }catch(e){}
-    try{ connection&&await connection.close(); }catch(e){}
+    try{ connection&&await connection.writable.close(); }catch(e){}
     transport=null; connection=null; adb=null;
     if(!keepClean) setStatus(t('webusb.disconnected'),'default');
   }
