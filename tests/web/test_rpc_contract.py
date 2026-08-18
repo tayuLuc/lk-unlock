@@ -18,10 +18,21 @@ WEB = ROOT / "web"
 
 # lkUnlock keys that are NOT plain RPC methods (registry entries are the rest).
 NON_RPC_KEYS = {
-    "ready", "rpcDescribe",
-    "init", "patchBufferLegacy", "importPem", "getPem", "getJwk",
-    "diagnose", "diagnoseImage", "validatePatch", "patchBuffer",
-    "parseToken", "detectOS", "pemFingerprint", "signToken",
+    "ready",
+    "rpcDescribe",
+    "init",
+    "patchBufferLegacy",
+    "importPem",
+    "getPem",
+    "getJwk",
+    "diagnose",
+    "diagnoseImage",
+    "validatePatch",
+    "patchBuffer",
+    "parseToken",
+    "detectOS",
+    "pemFingerprint",
+    "signToken",
 }
 
 
@@ -47,9 +58,7 @@ def test_rpc_contract(server):
         errors = []
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(server + "/index.html")
-        page.wait_for_function(
-            "window.lkUnlock && window.lkUnlock.ready()", timeout=180_000
-        )
+        page.wait_for_function("window.lkUnlock && window.lkUnlock.ready()", timeout=180_000)
 
         ui_keys = set(page.evaluate("Object.keys(window.lkUnlock)"))
         res = page.evaluate("async () => await window.lkUnlock.rpcDescribe()")
