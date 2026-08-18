@@ -875,27 +875,46 @@ worker.onmessage=e=>{
 };
 worker.onerror=e=>log('worker: '+e.message);
 
-/* ============ контракт lkUnlock (расширен, старый API сохранён) ============ */
+/* ============ контракт lkUnlock (RPC registry + legacy aliases) ============ */
 const state={ready:false,buf:null,pem:null,busy:null};
-window.lkUnlock={
-  ready:()=>state.ready,
-  // Original API (parity-test compatible)
-  init:jwk=>rpc('init',{jwk}),
-  patchBufferLegacy:(buf,jwk)=>(jwk?window.lkUnlock.init(jwk):Promise.resolve())
-      .then(()=>rpc('patch',{buf},[buf])),
-  signToken:text=>rpc('sign',{token:text}),
-  // Extended API for key management
-  importPem:pemText=>rpc('init',{pem:pemText}),
-  getPem:()=>rpc('pem'),
-  getJwk:()=>rpc('get_jwk'),
-  diagnose:buf=>rpc('diagnose',{buf},[buf]),
-  diagnoseImage:buf=>rpc('diagnose_image',{buf},[buf]),
-  validatePatch:(buf,opts)=>rpc('validate_patch',{buf,opts},[buf]),
-  patchBuffer:(buf,opts)=>rpc('patch_buffer',{buf,opts},[buf]),
-  parseToken:text=>rpc('parse_token',{token:text}),
-  detectOS:fingerprint=>rpc('detect_os',{fingerprint}),
-  pemFingerprint:jwk=>rpc('pem_fingerprint',{jwk}),
-};
+const rpcRegistry={};
+
+function registerRpc(name, fn){
+  if(name in rpcRegistry) throw new Error('duplicate RPC method: '+name);
+  rpcRegistry[name]=fn;
+}
+window.__registerRpc=registerRpc;  // exposed for the contract test
+
+registerRpc('ready', ()=>state.ready);
+registerRpc('rpcDescribe', ()=>rpc('rpc.describe'));
+// RPC methods — names MUST match patcher_web.RPC_REGISTRY (single source of truth).
+registerRpc('set_key_json', jwk=>rpc('init',{jwk}));
+registerRpc('patch_file', (buf,jwk)=>(jwk?rpc('init',{jwk}):Promise.resolve()).then(()=>rpc('patch',{buf},[buf])));
+registerRpc('sign_token', text=>rpc('sign',{token:text}));
+registerRpc('private_pem', ()=>rpc('pem'));
+registerRpc('get_jwk', ()=>rpc('get_jwk'));
+registerRpc('diagnose_file', buf=>rpc('diagnose',{buf},[buf]));
+registerRpc('diagnose_image', buf=>rpc('diagnose_image',{buf},[buf]));
+registerRpc('validate_patch_request', (buf,opts)=>rpc('validate_patch',{buf,opts},[buf]));
+registerRpc('patch_buffer', (buf,opts)=>rpc('patch_buffer',{buf,opts},[buf]));
+registerRpc('parse_token', text=>rpc('parse_token',{token:text}));
+registerRpc('detect_os', fingerprint=>rpc('detect_os',{fingerprint}));
+registerRpc('pem_fingerprint', jwk=>rpc('pem_fingerprint',{jwk}));
+// Legacy camelCase aliases (existing UI/tests keep working).
+rpcRegistry.init=rpcRegistry.set_key_json;
+rpcRegistry.patchBufferLegacy=rpcRegistry.patch_file;
+rpcRegistry.importPem=pemText=>rpc('init',{pem:pemText});
+rpcRegistry.getPem=rpcRegistry.private_pem;
+rpcRegistry.getJwk=rpcRegistry.get_jwk;
+rpcRegistry.diagnose=rpcRegistry.diagnose_file;
+rpcRegistry.diagnoseImage=rpcRegistry.diagnose_image;
+rpcRegistry.validatePatch=rpcRegistry.validate_patch_request;
+rpcRegistry.patchBuffer=rpcRegistry.patch_buffer;
+rpcRegistry.parseToken=rpcRegistry.parse_token;
+rpcRegistry.detectOS=rpcRegistry.detect_os;
+rpcRegistry.signToken=rpcRegistry.sign_token;
+rpcRegistry.pemFingerprint=rpcRegistry.pem_fingerprint;
+window.lkUnlock=Object.freeze(rpcRegistry);
 
 /* ============ lkPatchUi: strategy / JSON patches / report ============ */
 const lkPatchUi = (() => {

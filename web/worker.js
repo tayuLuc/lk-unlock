@@ -3,7 +3,7 @@
 importScripts("./pyodide/pyodide.js");
 importScripts("./gen/pyfiles.js");
 
-let pyodide = null, pw = null, hasKey = false;
+let pyodide = null, pw = null, hasKey = false, rpcManifest = null;
 const pyLog = (...a) => self.postMessage({type: "log", message: a.join(" ")});
 
 async function ensurePyodide() {
@@ -28,6 +28,8 @@ sys.path.insert(0, "/app")
 import patcher_web   # lk_unlock.keys shim is installed BEFORE importing patcher
 `);
   pw = pyodide.pyimport("patcher_web");
+  rpcManifest = JSON.parse(pw.get_rpc_manifest());
+  self.postMessage({type: "rpc.ready", version: rpcManifest.version, methods: rpcManifest.methods});
 }
 
 async function genJwk() {
@@ -69,6 +71,10 @@ async function ensureKey(jwk, pem) {
 }
 
 async function handle(msg) {
+  if (msg.type === "rpc.describe") {
+    if (!rpcManifest) await ensurePyodide();
+    return {type: "result", manifest: rpcManifest};
+  }
   switch (msg.type) {
     case "init": {
       const jwk = await ensureKey(msg.jwk || null, msg.pem || null);

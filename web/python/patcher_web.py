@@ -1516,3 +1516,34 @@ def patch_buffer(data: bytes, opts: dict) -> dict:
     return {"ok": len(errors) == 0, "output_image": bytes(buf),
             "output_name": "lk_patched.img", "sha256": sha,
             "report": report, "warnings": warnings, "errors": errors}
+
+
+# ---------------------------------------------------------------------------
+# RPC registry: single source of truth for RPC method names
+# ---------------------------------------------------------------------------
+RPC_REGISTRY = {}
+_RPC_VERSION = 1
+
+
+def _register_rpc(name, fn, version=_RPC_VERSION):
+    if name in RPC_REGISTRY:
+        raise ValueError(f"Duplicate RPC registration: {name}")
+    RPC_REGISTRY[name] = {"fn": fn, "version": version}
+
+
+def get_rpc_manifest() -> str:
+    return json.dumps({"version": _RPC_VERSION, "methods": list(RPC_REGISTRY.keys())})
+
+
+_register_rpc("set_key_json", set_key_json)
+_register_rpc("patch_file", patch_file)
+_register_rpc("sign_token", sign_token)
+_register_rpc("private_pem", private_pem)
+_register_rpc("get_jwk", get_jwk)
+_register_rpc("diagnose_file", diagnose_file)
+_register_rpc("diagnose_image", diagnose_image)
+_register_rpc("validate_patch_request", validate_patch_request)
+_register_rpc("patch_buffer", patch_buffer)
+_register_rpc("parse_token", parse_token)
+_register_rpc("detect_os", detect_os)
+_register_rpc("pem_fingerprint", pem_fingerprint)
