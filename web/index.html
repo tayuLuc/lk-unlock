@@ -1052,21 +1052,27 @@ async function showKeyFingerprint(){
       const manager=Manager.BROWSER;
       if(!manager){ setStatus('WebUSB недоступен','error'); return; }
       setStatus('Выберите устройство…','loading');
-      // Prefer an already-authorized device (getDevices) to skip the
-      // native chooser on repeat connections; fall back to requestDevice.
-      let device = (await manager.getDevices())[0];
-      if(!device) device = await manager.requestDevice();
+      // Always use the native chooser so the user picks the exact device
+      // (getDevices()[0] could blindly attach to an old/unplugged one).
+      const device = await manager.requestDevice();
       if(!device){ setStatus('Устройство не выбрано','error'); return; }
       setStatus('Подключение к '+device.name+'…','loading');
       connection=await device.connect();
       const credentialStore=new CredStore('lk-unlock@'+HOST);
-      setStatus('Авторизация…','loading');
+      setStatus('Подтвердите доступ на экране телефона…','loading');
       try{
-        transport=await AdbDaemonTransport.authenticate({serial:device.serial, connection, credentialStore});
+        // Race the ADB auth against a 20s timeout: if the user misses the
+        // RSA prompt on the phone, fail instead of hanging forever.
+        const authPromise=AdbDaemonTransport.authenticate({serial:device.serial, connection, credentialStore});
+        const timeout=new Promise((_,reject)=>setTimeout(()=>reject(new Error('AUTH_TIMEOUT')),20000));
+        transport=await Promise.race([authPromise,timeout]);
       }catch(err){
-        // Close the USB connection so the interface is released on auth failure.
+        // Close the USB connection so the interface is released on auth
+        // failure (otherwise it stays busy and reconnect errors out).
         try{ await connection.close(); }catch(_){}
         connection=null;
+        transport=null;
+        if(err.message==='AUTH_TIMEOUT') throw new Error('Истекло время ожидания. Разблокируйте экран телефона и подтвердите доступ.');
         throw err;
       }
       adb=new Adb(transport);
@@ -1085,7 +1091,7 @@ async function showKeyFingerprint(){
       const [fp,osv,locked]=await Promise.all([
         adb.getProp('ro.build.fingerprint').catch(e=>{console.warn('getprop fingerprint:',e);return '';}),
         adb.getProp('ro.mi.os.version.incremental').catch(e=>{console.warn('getprop os:',e);return '';}),
-        adb.getProp('ro.boot.flash.locked').catch(e=>{console.warn('getprop locked:',e);return '1';})
+        adb.getProp('ro.boot.flash.locked').catch(e=>{console.warn('getprop locked:',e);return '?';})
       ]);
       if(fp){
         fpInput.value=fp;
@@ -1095,7 +1101,7 @@ async function showKeyFingerprint(){
         setStatus('Нет fingerprint','error');
       }
       // Show device info via textContent (no innerHTML for device data).
-      const lockedTxt = locked==='0' ? 'Разблокирован' : 'Заблокирован';
+      const lockedTxt = locked==='0' ? 'Разблокирован' : locked==='?' ? 'Неизвестно' : 'Заблокирован';
       infoEl.textContent = `Bootloader: ${lockedTxt} · MI OS: ${osv||'N/A'}`;
       infoEl.style.display='block';
       // Re-run token analysis with the new fingerprint.
@@ -1113,8 +1119,8 @@ async function showKeyFingerprint(){
     if(!keepClean) setStatus('Отключено','default');
   }
   // Handle physical USB unplug.
-  if(navigator.usb) navigator.usb.addEventListener('disconnect',()=>{
-    if(transport||connection) disconnectDevice();
+  if(navigator.usb) navigator.usb.addEventListener('disconnect',async()=>{
+    if(transport||connection) await disconnectDevice();
     setStatus('Устройство отключено','error');
   });
   connectBtn.addEventListener('click',async()=>{
