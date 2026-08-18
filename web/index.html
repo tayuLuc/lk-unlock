@@ -2091,9 +2091,9 @@ async function showKeyFingerprint(){
       try {
         for (;;) {
           const pkt = await readPacket(this.transport);
-          if (pkt.cmd === ADB.CMD_OKAY) { const s = this.sockets.get(pkt.arg0); if (s) s._onOkay(pkt.arg1); }
-          else if (pkt.cmd === ADB.CMD_WRTE) { const s = this.sockets.get(pkt.arg0); if (s) { s._onData(pkt.payload); sendPacket(this.transport, ADB.CMD_OKAY, s.remoteId, pkt.arg0).catch(() => {}); } }
-          else if (pkt.cmd === ADB.CMD_CLSE) { const s = this.sockets.get(pkt.arg0); if (s) { s._onClose(); sendPacket(this.transport, ADB.CMD_CLSE, s.remoteId, pkt.arg0).catch(() => {}); this.sockets.delete(pkt.arg0); } }
+          if (pkt.cmd === ADB.CMD_OKAY) { const s = this.sockets.get(pkt.arg1); if (s) s._onOkay(pkt.arg0); }
+          else if (pkt.cmd === ADB.CMD_WRTE) { const s = this.sockets.get(pkt.arg1); if (s) { s._onData(pkt.payload); sendPacket(this.transport, ADB.CMD_OKAY, s.localId, pkt.arg0).catch(() => {}); } }
+          else if (pkt.cmd === ADB.CMD_CLSE) { const s = this.sockets.get(pkt.arg1); if (s) { s._onClose(); sendPacket(this.transport, ADB.CMD_CLSE, s.localId, pkt.arg0).catch(() => {}); this.sockets.delete(pkt.arg1); } }
         }
       } catch (e) {
         if (!this.closed) {
