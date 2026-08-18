@@ -1818,6 +1818,30 @@ async function showKeyFingerprint(){
   const connectBtn=els.connectDeviceBtn, statusEl=els.deviceStatus, fpInput=els.fingerprint, infoEl=els.deviceInfo;
   const HOST = location.hostname || 'localhost';
 
+  // localStorage-backed ADB key store — same approach as app.webadb.com
+  // (their key lives in localStorage["private-key"]). AdbWebCredentialStore
+  // (IndexedDB "Tango") failed to produce a working auth on some profiles,
+  // so we mirror the reference implementation that provably works.
+  class LocalAdbKeyStore{
+    constructor(name){ this.lsKey='adb-key:'+name; }
+    async *iterateKeys(){
+      const raw=localStorage.getItem(this.lsKey);
+      if(!raw) return;
+      const bin=atob(raw), buf=new Uint8Array(bin.length);
+      for(let i=0;i<bin.length;i++) buf[i]=bin.charCodeAt(i);
+      yield { buffer:buf, name:this.lsKey };
+    }
+    async generateKey(){
+      const {privateKey}=await crypto.subtle.generateKey(
+        {name:'RSASSA-PKCS1-v1_5',modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:'SHA-1'},
+        true,['sign','verify']);
+      const buf=new Uint8Array(await crypto.subtle.exportKey('pkcs8',privateKey));
+      let bin=''; for(let i=0;i<buf.length;i++) bin+=String.fromCharCode(buf[i]);
+      localStorage.setItem(this.lsKey,btoa(bin));
+      return { buffer:buf, name:this.lsKey };
+    }
+  }
+
   // ADB packet log (same idea as app.webadb.com's Packet Log): wrap the
   // connection in logging streams so every packet is visible in the log.
   // Decodes the 4-byte command into a readable name plus arg0/arg1/len.
@@ -1907,7 +1931,7 @@ async function showKeyFingerprint(){
           throw new Error('USB_BLOCKED');
         throw claimErr;
       }
-      const credentialStore=new CredStore('lk-unlock@'+HOST);
+      const credentialStore=new LocalAdbKeyStore('lk-unlock');
       // Wrap the connection in logging streams so the auth handshake is
       // visible in the log (matches app.webadb.com's packet log approach).
       const authConn = pktLogOn ? wrapConnForLog(connection) : connection;
