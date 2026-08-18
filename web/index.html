@@ -1837,7 +1837,7 @@ async function showKeyFingerprint(){
   // key instead of the mincrypt RSAPublicKey struct adbd requires, so the
   // phone silently ignores the handshake and never shows the RSA dialog.
   const ADB={
-    CMD_CNXN:0x4e58434e, CMD_AUTH:0x48545541, CMD_OPEN:0x4e45504f,
+    CMD_CNXN:0x4e584e43, CMD_AUTH:0x48545541, CMD_OPEN:0x4e45504f,
     CMD_OKAY:0x59414b4f, CMD_CLSE:0x45534c43, CMD_WRTE:0x45545257,
     AUTH_TOKEN:1, AUTH_SIGNATURE:2, AUTH_RSAPUBLICKEY:3,
     VERSION:0x01000001, MAX_PAYLOAD:1024*1024
@@ -1905,7 +1905,7 @@ async function showKeyFingerprint(){
     }
   };
 // Low-level packet I/O with optional packet log.
-  const PKT_CMDS={0x4e58434e:'CNXN',0x48545541:'AUTH',0x4e45504f:'OPEN',0x59414b4f:'OKAY',0x45534c43:'CLSE',0x45545257:'WRTE',0x434e5953:'SYNC'};
+  const PKT_CMDS={0x4e584e43:'CNXN',0x48545541:'AUTH',0x4e45504f:'OPEN',0x59414b4f:'OKAY',0x45534c43:'CLSE',0x45545257:'WRTE',0x434e5953:'SYNC'};
   const AUTH_TYPES={1:'TOKEN',2:'SIGNATURE',3:'PUBKEY'};
   function pktCmd(c){ return PKT_CMDS[c]||'0x'+c.toString(16).toUpperCase().padStart(8,'0'); }
   function calculateChecksum(p){ let s=0; for(let i=0;i<p.length;i++) s=(s+p[i])&0xffffffff; return s>>>0; }
