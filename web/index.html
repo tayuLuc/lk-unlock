@@ -130,6 +130,12 @@ textarea:focus{outline:none;border-color:var(--acc1);box-shadow:0 0 0 3px rgba(1
 .hash.on{opacity:1;transform:none}
 
 /* ---------- token explanation ---------- */
+.webusb-row{display:flex;gap:10px;align-items:center;margin:10px 0}
+.device-status{font:12px var(--mono);color:var(--muted);white-space:nowrap}
+.device-status.connected{color:#22d07a}
+.device-status.error{color:#ef4444}
+.device-status.loading{color:#00d4ff}
+.device-info{font:11.5px var(--mono);color:var(--muted);margin:4px 0}
 .disclaimer{margin:8px 0 0;font:12px var(--sans);color:#f5a623}
 .token-explain{margin:14px 0 0;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:rgba(255,255,255,.02)}
 .token-explain summary{cursor:pointer;font:12.5px var(--sans);color:var(--acc2);user-select:none}
@@ -333,6 +339,11 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
       <textarea id="token" spellcheck="false" placeholder="Вставьте токен…"></textarea>
       <label class="lbl" for="fingerprint" style="margin-top:10px">FINGERPRINT (необязательно, для сверки ОС)</label>
       <input id="fingerprint" type="text" spellcheck="false" placeholder="POCO/fleur_p_ru/fleur:13/.../TKERUXM:user/release-keys" style="width:100%;background:rgba(0,0,0,.35);border:1px solid var(--border);border-radius:12px;color:var(--text);font:12px var(--mono);padding:10px 12px">
+      <div class="webusb-row">
+        <button id="connectDeviceBtn" class="btn ghost" style="flex:1" title="Подключить Android-телефон через USB">🔌 Подключить телефон</button>
+        <span id="deviceStatus" class="device-status">Не подключено</span>
+      </div>
+      <div class="device-info" id="deviceInfo" style="display:none"></div>
       <div class="os-warning" id="osWarning">
         <b id="osWarningTitle">Предупреждение:</b> <span id="osWarningText"></span>
       </div>
@@ -456,6 +467,9 @@ const els={
   sign:$('#btnSign'),
   token:$('#token'),
   fingerprint:$('#fingerprint'),
+  connectDeviceBtn:$('#connectDeviceBtn'),
+  deviceStatus:$('#deviceStatus'),
+  deviceInfo:$('#deviceInfo'),
   drop:$('#drop'),
   meta:$('#fileMeta'),
   dropLoaded:$('#dropLoaded'),
@@ -1002,6 +1016,100 @@ async function showKeyFingerprint(){
   }
   let tmr;
   tokenEl.addEventListener('input',()=>{clearTimeout(tmr);tmr=setTimeout(updateViz,150);});
+})();
+
+/* ================= WebUSB ADB: read-only getprop ================= */
+(() => {
+  let adb=null, transport=null;
+  const connectBtn=els.connectDeviceBtn, statusEl=els.deviceStatus, fpInput=els.fingerprint, infoEl=els.deviceInfo;
+
+  function setStatus(msg,type='default'){
+    const t=statusEl.querySelector('.status-text');
+    if(t) t.textContent=msg;
+    else statusEl.textContent=msg;
+    statusEl.className='device-status '+type;
+  }
+  function checkWebUSB(){
+    if(!navigator.usb) return {ok:false, reason:'WebUSB не поддерживается. Используйте Chrome/Edge.'};
+    if(location.protocol!=='https:'&&location.hostname!=='localhost'&&location.hostname!=='127.0.0.1')
+      return {ok:false, reason:'WebUSB требует HTTPS.'};
+    return {ok:true};
+  }
+  async function loadAdbLibs(){
+    if(window.AdbLibs) return window.AdbLibs;
+    setStatus('Загрузка библиотек…','loading');
+    try{
+      const [adbM,webusbM,credM]=await Promise.all([
+        import('https://esm.sh/@yume-chan/adb@2.6.2'),
+        import('https://esm.sh/@yume-chan/adb-daemon-webusb@2.3.2'),
+        import('https://esm.sh/@yume-chan/adb-credential-web@2.1.0')
+      ]);
+      window.AdbLibs={Adb:adbM.Adb, AdbDaemonTransport:adbM.AdbDaemonTransport,
+        Manager:webusbM.AdbDaemonWebUsbDeviceManager, CredStore:credM.default};
+      return window.AdbLibs;
+    }catch(e){ setStatus('Не удалось загрузить библиотеки','error'); throw e; }
+  }
+  async function connectToDevice(){
+    const c=checkWebUSB();
+    if(!c.ok){ setStatus(c.reason,'error'); return; }
+    try{
+      const {Adb,AdbDaemonTransport,Manager,CredStore}=await loadAdbLibs();
+      const manager=Manager.BROWSER;
+      if(!manager){ setStatus('WebUSB недоступен','error'); return; }
+      setStatus('Выберите устройство…','loading');
+      const device=await manager.requestDevice();
+      if(!device){ setStatus('Устройство не выбрано','error'); return; }
+      setStatus('Подключение к '+device.name+'…','loading');
+      const connection=await device.connect();
+      const credStore=new CredStore('lk-unlock@'+location.hostname);
+      setStatus('Авторизация…','loading');
+      // Correct signature: {serial, connection, credentialStore}
+      transport=await AdbDaemonTransport.authenticate({serial:device.serial, connection, credentialStore});
+      adb=new Adb(transport);
+      setStatus('✓ '+device.name,'connected');
+      await readDeviceProperties();
+    }catch(e){
+      console.error('WebUSB connect error:',e);
+      setStatus('Ошибка: '+(e.message||e),'error');
+      disconnectDevice();
+    }
+  }
+  async function readDeviceProperties(){
+    if(!adb) return;
+    try{
+      setStatus('Чтение данных…','loading');
+      const [fp,osv,locked]=await Promise.all([
+        adb.getProp('ro.build.fingerprint').catch(()=>''),
+        adb.getProp('ro.mi.os.version.incremental').catch(()=>''),
+        adb.getProp('ro.boot.flash.locked').catch(()=>'1')
+      ]);
+      if(fp){
+        fpInput.value=fp;
+        fpInput.dispatchEvent(new Event('input',{bubbles:true}));
+        setStatus('✓ Данные получены','connected');
+      } else {
+        setStatus('Нет fingerprint','error');
+      }
+      // Show device info via textContent (no innerHTML for device data).
+      const lockedTxt = locked==='0' ? 'Разблокирован' : 'Заблокирован';
+      infoEl.textContent = `Bootloader: ${lockedTxt} · MI OS: ${osv||'N/A'}`;
+      infoEl.style.display='block';
+      // Re-run token analysis with the new fingerprint.
+      if(typeof analyzeToken==='function') analyzeToken();
+    }catch(e){
+      console.error('WebUSB read error:',e);
+      setStatus('Ошибка чтения: '+(e.message||e),'error');
+    }
+  }
+  function disconnectDevice(){
+    try{ transport&&transport.close(); }catch(e){}
+    transport=null; adb=null;
+    setStatus('Отключено','default');
+  }
+  connectBtn.addEventListener('click',async()=>{
+    if(transport) disconnectDevice(); else await connectToDevice();
+  });
+  setStatus('Не подключено');
 })();
 
 /* «прожектор» на карточках */
