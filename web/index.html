@@ -1908,27 +1908,25 @@ async function showKeyFingerprint(){
     logPkt('OUT',cmd,arg0,arg1,payload.length);
     await device.transferOut(outEp,packet);
   }
+  // Read ADB packets from a persistent JS buffer fed by large transferIn
+  // reads (16KB). This avoids the babble/overflow error of requesting
+  // exact header/payload sizes — the device may send header+payload in
+  // one USB transfer, and chunked reads would lose the excess bytes.
+  let usbReadBuf=new Uint8Array(0);
   async function readPacket(device,inEp,timeoutMs=15000){
-    // Timeout guard: a silent phone must not hang the app forever.
-    const withTimeout = p => Promise.race([p, new Promise((_,rej)=>setTimeout(()=>rej(new Error('USB read timeout')),timeoutMs))]);
-    let header=new Uint8Array();
-    while(header.length<24){
-      const res=await withTimeout(device.transferIn(inEp,24-header.length));
+    const withTimeout=p=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('USB read timeout')),timeoutMs))]);
+    async function fill(){
+      const res=await withTimeout(device.transferIn(inEp,16384));
       if(res.status!=='ok') throw new Error('USB transfer error (status '+res.status+')');
       const chunk=new Uint8Array(res.data.buffer,res.data.byteOffset,res.data.byteLength);
-      const merged=new Uint8Array(header.length+chunk.length); merged.set(header); merged.set(chunk,header.length); header=merged;
+      const merged=new Uint8Array(usbReadBuf.length+chunk.length); merged.set(usbReadBuf); merged.set(chunk,usbReadBuf.length); usbReadBuf=merged;
     }
-    const v=new DataView(header.buffer);
+    while(usbReadBuf.length<24) await fill();
+    const v=new DataView(usbReadBuf.buffer,usbReadBuf.byteOffset,24);
     const cmd=v.getUint32(0,true), arg0=v.getUint32(4,true), arg1=v.getUint32(8,true), len=v.getUint32(12,true);
-    let payload=new Uint8Array();
-    if(len>0){
-      while(payload.length<len){
-        const res=await withTimeout(device.transferIn(inEp,len-payload.length));
-        if(res.status!=='ok') throw new Error('USB transfer error (status '+res.status+')');
-        const chunk=new Uint8Array(res.data.buffer,res.data.byteOffset,res.data.byteLength);
-        const merged=new Uint8Array(payload.length+chunk.length); merged.set(payload); merged.set(chunk,payload.length); payload=merged;
-      }
-    }
+    while(usbReadBuf.length<24+len) await fill();
+    const payload=usbReadBuf.slice(24,24+len);
+    usbReadBuf=usbReadBuf.slice(24+len);
     logPkt('IN',cmd,arg0,arg1,len);
     return {cmd,arg0,arg1,payload};
   }
