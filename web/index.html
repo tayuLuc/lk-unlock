@@ -1058,7 +1058,10 @@ async function showKeyFingerprint(){
       const manager=Manager.BROWSER;
       if(!manager){ setStatus('WebUSB недоступен','error'); return; }
       setStatus('Выберите устройство…','loading');
-      const device=await manager.requestDevice();
+      // Prefer an already-authorized device (getDevices) to skip the
+      // native chooser on repeat connections; fall back to requestDevice.
+      let device = (await manager.getDevices())[0];
+      if(!device) device = await manager.requestDevice();
       if(!device){ setStatus('Устройство не выбрано','error'); return; }
       setStatus('Подключение к '+device.name+'…','loading');
       connection=await device.connect();
