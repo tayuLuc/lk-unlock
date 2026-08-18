@@ -736,6 +736,38 @@ def diagnose_file(data) -> str:
 
     return json.dumps(result)
 
+def _token_payload(token_text: str) -> str:
+    if isinstance(token_text, bytes):
+        token_text = token_text.decode("utf-8", "ignore")
+
+    parts = []
+    for line in (token_text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        line = re.sub(r"^\(bootloader\)\s*", "", line, flags=re.I)
+        line = line.strip()
+
+        # Drop "OKAY" only as a standalone status line, not inside a token.
+        if re.fullmatch(r"OKAY", line, flags=re.I):
+            continue
+
+        line = re.sub(r"^token\s*:\s*", "", line, flags=re.I)
+        line = line.strip()
+
+        if line:
+            parts.append(line)
+
+    tok = "".join(parts)
+    tok = re.sub(r"\s+", "", tok)
+
+    if tok.lower().startswith("0x"):
+        tok = tok[2:]
+
+    return tok
+
+
 def _decode_token_bytes(tok: str) -> bytes:
     if not tok:
         raise ValueError("Пустой токен")
