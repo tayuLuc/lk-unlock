@@ -73,7 +73,7 @@ async function ensureKey(jwk, pem) {
 async function handle(msg) {
   if (msg.type === "rpc.describe") {
     if (!rpcManifest) await ensurePyodide();
-    return {type: "result", manifest: rpcManifest};
+    return {type: "result", result: rpcManifest};
   }
   switch (msg.type) {
     case "init": {

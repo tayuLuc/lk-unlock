@@ -61,8 +61,7 @@ def test_rpc_contract(server):
         page.wait_for_function("window.lkUnlock && window.lkUnlock.ready()", timeout=180_000)
 
         ui_keys = set(page.evaluate("Object.keys(window.lkUnlock)"))
-        res = page.evaluate("async () => await window.lkUnlock.rpcDescribe()")
-        manifest = res["manifest"]
+        manifest = page.evaluate("async () => await window.lkUnlock.rpcDescribe()")
         worker_methods = set(manifest["methods"])
 
         ui_rpc_keys = ui_keys - NON_RPC_KEYS
@@ -71,6 +70,18 @@ def test_rpc_contract(server):
             f"Only in UI: {ui_rpc_keys - worker_methods}\n"
             f"Only in Worker/Python: {worker_methods - ui_rpc_keys}"
         )
+
+        aliases = page.evaluate("window.__RPC_ALIASES")
+        assert aliases, "RPC_ALIASES empty"
+        for alias, target in aliases.items():
+            ok_target = page.evaluate(
+                f"typeof window.lkUnlock['{target}'] === 'function'"
+            )
+            ok_alias = page.evaluate(
+                f"window.lkUnlock['{alias}'] === window.lkUnlock['{target}']"
+            )
+            assert ok_target, f"dead alias target: {target}"
+            assert ok_alias, f"alias mismatch: {alias}"
 
         duplicate = page.evaluate(
             """() => {

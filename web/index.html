@@ -900,20 +900,24 @@ registerRpc('patch_buffer', (buf,opts)=>rpc('patch_buffer',{buf,opts},[buf]));
 registerRpc('parse_token', text=>rpc('parse_token',{token:text}));
 registerRpc('detect_os', fingerprint=>rpc('detect_os',{fingerprint}));
 registerRpc('pem_fingerprint', jwk=>rpc('pem_fingerprint',{jwk}));
-// Legacy camelCase aliases (existing UI/tests keep working).
-rpcRegistry.init=rpcRegistry.set_key_json;
-rpcRegistry.patchBufferLegacy=rpcRegistry.patch_file;
+// Legacy camelCase aliases: single self-checking map (broken target throws).
+const RPC_ALIASES = {
+  init: 'set_key_json', patchBufferLegacy: 'patch_file', signToken: 'sign_token',
+  getPem: 'private_pem', getJwk: 'get_jwk', diagnose: 'diagnose_file',
+  diagnoseImage: 'diagnose_image', validatePatch: 'validate_patch_request',
+  patchBuffer: 'patch_buffer', parseToken: 'parse_token', detectOS: 'detect_os',
+  pemFingerprint: 'pem_fingerprint',
+};
+for (const [alias, target] of Object.entries(RPC_ALIASES)) {
+  if (typeof rpcRegistry[target] !== 'function')
+    throw new Error('RPC alias broken: '+alias+' -> '+target+' (target not registered)');
+  if (alias in rpcRegistry)
+    throw new Error('RPC alias conflict: '+alias+' already registered');
+  rpcRegistry[alias]=rpcRegistry[target];
+}
+// importPem is not an alias: different signature (pem text, not jwk).
 rpcRegistry.importPem=pemText=>rpc('init',{pem:pemText});
-rpcRegistry.getPem=rpcRegistry.private_pem;
-rpcRegistry.getJwk=rpcRegistry.get_jwk;
-rpcRegistry.diagnose=rpcRegistry.diagnose_file;
-rpcRegistry.diagnoseImage=rpcRegistry.diagnose_image;
-rpcRegistry.validatePatch=rpcRegistry.validate_patch_request;
-rpcRegistry.patchBuffer=rpcRegistry.patch_buffer;
-rpcRegistry.parseToken=rpcRegistry.parse_token;
-rpcRegistry.detectOS=rpcRegistry.detect_os;
-rpcRegistry.signToken=rpcRegistry.sign_token;
-rpcRegistry.pemFingerprint=rpcRegistry.pem_fingerprint;
+window.__RPC_ALIASES=RPC_ALIASES;
 window.lkUnlock=Object.freeze(rpcRegistry);
 
 /* ============ lkPatchUi: strategy / JSON patches / report ============ */
