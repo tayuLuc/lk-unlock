@@ -131,7 +131,7 @@ textarea:focus{outline:none;border-color:var(--acc1);box-shadow:0 0 0 3px rgba(1
 
 /* ---------- token explanation ---------- */
 .webusb-row{display:flex;gap:10px;align-items:center;margin:10px 0}
-.device-status{font:12px var(--mono);color:var(--muted);white-space:nowrap}
+.device-status{font:12px var(--mono);color:var(--muted);line-height:1.4;min-width:0}
 .device-status.connected{color:#22d07a}
 .device-status.error{color:#ef4444}
 .device-status.loading{color:#00d4ff}
@@ -260,6 +260,7 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
     MTK Forge
   </div>
   <div class="badge" id="badge"><span class="dot"></span><span id="badgeText" data-i18n="status.pyodideLoading">Загрузка Pyodide…</span></div>
+  <button id="langBtn" type="button" style="margin-left:8px;cursor:pointer;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:999px;padding:6px 13px;font:12px var(--mono);color:var(--muted)">EN</button>
 </header>
 
 <main class="wrap">
@@ -437,7 +438,8 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
       'webusb.disconnected': 'Отключено',
       'webusb.deviceNotSelected': 'Устройство не выбрано',
       'webusb.deviceDisconnected': 'Устройство отключено',
-      'webusb.interfaceBusy': 'USB-интерфейс занят другим приложением. Закройте Android Studio, scrcpy или выполните `adb kill-server` в терминале, затем переподключите кабель.',
+      'webusb.interfaceBusy': 'USB-интерфейс занят другим приложением',
+      'webusb.interfaceBusyDetail': 'Закройте Android Studio, scrcpy или выполните `adb kill-server` в терминале, затем переподключите кабель.',
       'webusb.error': 'Ошибка: {error}',
       'webusb.loadingLibs': 'Загрузка библиотек…',
       'webusb.connectAndroidPhone': 'Подключить Android-телефон через USB',
@@ -554,7 +556,8 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
       'webusb.disconnected': 'Disconnected',
       'webusb.deviceNotSelected': 'No device selected',
       'webusb.deviceDisconnected': 'Device disconnected',
-      'webusb.interfaceBusy': 'The USB interface is busy with another application. Close Android Studio, scrcpy, or run `adb kill-server` in a terminal, then reconnect the cable.',
+      'webusb.interfaceBusy': 'The USB interface is busy with another application',
+      'webusb.interfaceBusyDetail': 'Close Android Studio, scrcpy, or run `adb kill-server` in a terminal, then reconnect the cable.',
       'webusb.error': 'Error: {error}',
       'webusb.loadingLibs': 'Loading libraries…',
       'webusb.connectAndroidPhone': 'Connect an Android phone via USB',
@@ -630,6 +633,11 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
   };
 
   function detectLang() {
+    // Manual choice (language button) wins, then browser preference, then ru.
+    try {
+      const saved = localStorage.getItem('lk-unlock-lang');
+      if (saved === 'ru' || saved === 'en') return saved;
+    } catch (e) { /* private mode etc. */ }
     const candidates = [];
     if (Array.isArray(navigator.languages)) candidates.push(...navigator.languages);
     if (navigator.language) candidates.push(navigator.language);
@@ -641,7 +649,7 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
     return 'ru';
   }
 
-  const lang = detectLang();
+  let lang = detectLang();
 
   function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, (ch) => ({
@@ -699,6 +707,27 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
   window.t = t;
   window.tHtml = tHtml;
   window.initI18n = applyTranslations;
+
+  // Manual language toggle: the button shows the language it will switch to.
+  function renderLangBtn() {
+    const btn = document.getElementById('langBtn');
+    if (btn) btn.textContent = lang === 'ru' ? 'EN' : 'RU';
+  }
+  function setLang(next) {
+    if (next !== 'ru' && next !== 'en') return;
+    lang = next;
+    try { localStorage.setItem('lk-unlock-lang', next); } catch (e) {}
+    applyTranslations();
+    renderLangBtn();
+  }
+  window.setLang = setLang;
+  window.I18N_LANG = lang;
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.getElementById('langBtn');
+    if (btn) btn.addEventListener('click', () => setLang(lang === 'ru' ? 'en' : 'ru'));
+    renderLangBtn();
+  });
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', applyTranslations);
@@ -1417,8 +1446,10 @@ async function showKeyFingerprint(){
       console.error('WebUSB connect error:',e);
       await disconnectDevice(true);
       // claimInterface error: interface held by another program.
-      if(e.message==='USB_BLOCKED')
+      if(e.message==='USB_BLOCKED'){
         setStatus(t('webusb.interfaceBusy'),'error');
+        log(t('webusb.interfaceBusyDetail'));
+      }
       else
         setStatus(t('webusb.error',{error:e.message||e}),'error');
     }finally{
