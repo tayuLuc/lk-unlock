@@ -134,6 +134,9 @@ textarea:focus{outline:none;border-color:var(--acc1);box-shadow:0 0 0 3px rgba(1
 .device-status{font:12px var(--mono);color:var(--muted);line-height:1.4;min-width:0}
 .device-status.connected{color:#22d07a}
 .device-status.error{color:#ef4444}
+.btn.active{outline:2px solid var(--accent)}
+.pkt-IN{color:#22d07a;font-weight:600}
+.pkt-OUT{color:#00d4ff;font-weight:600}
 .device-status.loading{color:#00d4ff}
 .device-info{font:11.5px var(--mono);color:var(--muted);margin:4px 0}
 .disclaimer{margin:8px 0 0;font:12px var(--sans);color:#f5a623}
@@ -442,6 +445,7 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
   <!-- журнал -->
   <section class="card log-card">
     <div class="c-head"><h2 style="margin:0;font-size:15px" data-i18n="log.title">Журнал</h2>
+      <button id="btnPkts" class="btn ghost mini" title="Показывать ADB-пакеты при подключении" data-i18n="log.pkts">пакеты</button>
       <button id="btnClear" class="btn ghost mini" style="margin-left:auto" data-i18n="common.clear">очистить</button></div>
     <pre id="log" aria-live="polite"></pre>
   </section>
@@ -478,6 +482,9 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
 
       'visualization.title': 'Визуализация токена',
       'log.title': 'Журнал',
+      'log.pkts': 'пакеты',
+      'log.pktsOn': 'Лог ADB-пакетов включён',
+      'log.pktsOff': 'Лог ADB-пакетов выключен',
       'common.clear': 'очистить',
       'token.placeholder': 'Вставьте токен…',
 
@@ -617,6 +624,9 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
 
       'visualization.title': 'Token visualization',
       'log.title': 'Log',
+      'log.pkts': 'packets',
+      'log.pktsOn': 'ADB packet log enabled',
+      'log.pktsOff': 'ADB packet log disabled',
       'common.clear': 'clear',
       'token.placeholder': 'Paste token…',
 
@@ -1804,8 +1814,43 @@ async function showKeyFingerprint(){
 /* ================= WebUSB ADB: read-only getprop ================= */
 (() => {
   let adb=null, transport=null, connection=null, isConnecting=false;
+  let pktLogOn=false;
   const connectBtn=els.connectDeviceBtn, statusEl=els.deviceStatus, fpInput=els.fingerprint, infoEl=els.deviceInfo;
   const HOST = location.hostname || 'localhost';
+
+  // ADB packet log (same idea as app.webadb.com's Packet Log): wrap the
+  // connection in logging streams so every packet is visible in the log.
+  // Decodes the 4-byte command into a readable name plus arg0/arg1/len.
+  const PKT_CMDS={0x4e58434e:'CNXN',0x48545541:'AUTH',0x4e45504f:'OPEN',0x59414b4f:'OKAY',0x45534c43:'CLSE',0x45545257:'WRTE',0x434e5953:'SYNC'};
+  const AUTH_TYPES={1:'TOKEN',2:'SIGNATURE',3:'PUBKEY'};
+  function pktCmd(c){ return PKT_CMDS[c]||'0x'+c.toString(16).toUpperCase().padStart(8,'0'); }
+  function pktDesc(p){
+    const len=p.payload?p.payload.byteLength:0;
+    let hex='';
+    if(p.payload){ const b=new Uint8Array(p.payload.buffer||p.payload,p.payload.byteOffset||0,Math.min(len,12)); for(let i=0;i<b.length;i++) hex+=b[i].toString(16).padStart(2,'0')+' '; if(len>12) hex+='…'; }
+    let a0=p.arg0;
+    if(p.command===0x48545541) a0+='('+(AUTH_TYPES[p.arg0]||'?')+')'; // AUTH
+    return `${pktCmd(p.command)} a0=${a0} a1=${p.arg1} len=${len} ${hex}`;
+  }
+  function pktLog(dir,p){
+    try{ log(`<span class="pkt-${dir}">[${dir}]</span> ${pktDesc(p)}`); }
+    catch(e){ log(`[${dir}] <packet>`); }
+  }
+  function wrapConnForLog(conn){
+    const logIn=new TransformStream({ transform:(p,c)=>{pktLog('IN',p); c.enqueue(p);} });
+    const inner=conn.writable.getWriter();
+    const logOut=new WritableStream({
+      write:async p=>{pktLog('OUT',p); await inner.write(p);},
+      close:async()=>{inner.releaseLock(); try{await conn.writable.close();}catch(_){}},
+      abort:async e=>{inner.releaseLock(); try{await conn.writable.abort(e);}catch(_){}},
+    });
+    return { readable: conn.readable.pipeThrough(logIn), writable: logOut };
+  }
+  $('#btnPkts').onclick=()=>{
+    pktLogOn=!pktLogOn;
+    $('#btnPkts').classList.toggle('active',pktLogOn);
+    log(pktLogOn?t('log.pktsOn'):t('log.pktsOff'));
+  };
 
   function setStatus(msg,type='default'){
     const t=statusEl.querySelector('.status-text');
@@ -1863,11 +1908,14 @@ async function showKeyFingerprint(){
         throw claimErr;
       }
       const credentialStore=new CredStore('lk-unlock@'+HOST);
+      // Wrap the connection in logging streams so the auth handshake is
+      // visible in the log (matches app.webadb.com's packet log approach).
+      const authConn = pktLogOn ? wrapConnForLog(connection) : connection;
       setStatus(t('webusb.confirmAccess'),'loading');
       try{
         // Race the ADB auth against a 20s timeout: if the user misses the
         // RSA prompt on the phone, fail instead of hanging forever.
-        const authPromise=AdbDaemonTransport.authenticate({serial:device.serial, connection, credentialStore});
+        const authPromise=AdbDaemonTransport.authenticate({serial:device.serial, connection:authConn, credentialStore});
         authPromise.catch(()=>{}); // late rejection after timeout must not become unhandled
         let timer;
         const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('AUTH_TIMEOUT')),20000)});
