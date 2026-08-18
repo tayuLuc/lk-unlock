@@ -242,9 +242,9 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
       <path d="M13 5.2 7.4 13H11l-1 5.8L15.6 11H12l1-5.8Z" fill="url(#gS)"/>
     </svg>
     <h2>MTK Forge</h2>
-    <p class="s-sub">ПАТЧЕР ПРОШИВОК MEDIATEK · PYODIDE/WASM</p>
+    <p class="s-sub" data-i18n="header.tag">ПАТЧЕР ПРОШИВОК MEDIATEK · PYODIDE/WASM</p>
     <div class="bar"><i id="splashBar"></i></div>
-    <div class="s-row"><span id="splashStatus">Загружаем Pyodide…</span><span id="splashPct">0%</span></div>
+    <div class="s-row"><span id="splashStatus" data-i18n="status.loadingPyodide">Загружаем Pyodide…</span><span id="splashPct">0%</span></div>
   </div>
 </div>
 
@@ -259,28 +259,28 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
     </svg>
     MTK Forge
   </div>
-  <div class="badge" id="badge"><span class="dot"></span><span id="badgeText">Загрузка Pyodide…</span></div>
+  <div class="badge" id="badge"><span class="dot"></span><span id="badgeText" data-i18n="status.pyodideLoading">Загрузка Pyodide…</span></div>
 </header>
 
 <main class="wrap">
   <section class="hero">
     <div class="tag">PYODIDE · WASM · 100% OFFLINE</div>
-    <h1>Разблокировка <span class="grad">MediaTek</span><br>прямо в браузере</h1>
-    <p>Патч загрузчика lk.img и подпись токенов выполняются локально на вашем устройстве. Файлы и ключи никуда не отправляются.</p>
+    <h1 data-i18n-html="hero.h1">Разблокировка <span class="grad">MediaTek</span><br>прямо в браузере</h1>
+    <p data-i18n="hero.desc">Патч загрузчика lk.img и подпись токенов выполняются локально на вашем устройстве. Файлы и ключи никуда не отправляются.</p>
   </section>
 
   <section class="grid">
     <!-- карточка 1: патч lk.img -->
     <article class="card">
-      <div class="c-head"><span class="num">01</span><h2>Патч lk.img</h2><span class="c-tag">bootloader</span></div>
-      <p class="c-desc">Загрузите образ — на выходе получите пропатченный lk_patched.img и приватный ключ private.pem.</p>
+      <div class="c-head"><span class="num">01</span><h2 data-i18n="patch.title">Патч lk.img</h2><span class="c-tag">bootloader</span></div>
+      <p class="c-desc" data-i18n="patch.desc">Загрузите образ — на выходе получите пропатченный lk_patched.img и приватный ключ private.pem.</p>
       <label class="drop" id="drop" for="lkfile">
         <div class="drop-empty">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 16V4m0 0 4 4m-4-4L8 8M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>
           </svg>
-          <b>Перетащите lk.img сюда</b>
-          <span>или нажмите для выбора .img / .bin</span>
+          <b data-i18n="file.dropLkImg">Перетащите lk.img сюда</b>
+          <span data-i18n="file.orClick">или нажмите для выбора .img / .bin</span>
         </div>
         <div class="drop-loaded" id="dropLoaded" style="display:none">
           <div class="file-card">
@@ -290,8 +290,8 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
               <div class="file-card-meta" id="fileCardMeta"></div>
             </div>
             <div class="file-card-actions">
-              <button type="button" class="btn ghost mini" id="btnReplace" onclick="els.lkfile.click()">Заменить</button>
-              <button type="button" class="icon-btn" id="btnRemove" aria-label="Убрать файл">✕</button>
+              <button type="button" class="btn ghost mini" id="btnReplace" onclick="els.lkfile.click()" data-i18n="key.replace">Заменить</button>
+              <button type="button" class="icon-btn" id="btnRemove" data-i18n-attr="aria-label:key.removeFile" aria-label="Убрать файл">✕</button>
             </div>
           </div>
         </div>
@@ -302,8 +302,8 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
 
       <!-- Key management: import / export / status -->
       <div class="row" style="margin-bottom:0">
-        <button id="btnImport" class="btn ghost" style="flex:1" disabled title="Ожидается private.pem">Загрузить ключ</button>
-        <button id="btnExport" class="btn ghost" style="flex:1" disabled title="Скачивается private.pem">Сохранить ключ</button>
+        <button id="btnImport" class="btn ghost" style="flex:1" disabled data-i18n="key.load" data-i18n-title="key.expectPrivatePem" title="Ожидается private.pem">Загрузить ключ</button>
+        <button id="btnExport" class="btn ghost" style="flex:1" disabled data-i18n="key.save" data-i18n-title="status.downloadingPem" title="Скачивается private.pem">Сохранить ключ</button>
       </div>
       <input type="file" id="pemfile" accept=".pem,application/x-pem-file,text/plain" hidden>
       <div class="key-badge" id="keyStatus">
@@ -318,75 +318,395 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
       </div>
 
       <div class="row">
-        <button id="btnPatch" class="btn primary" disabled>Патчить → lk_patched.img</button>
+        <button id="btnPatch" class="btn primary" disabled data-i18n="file.patchTo">Патчить → lk_patched.img</button>
       </div>
       <div class="row" style="margin-top:10px">
-        <a id="dlImg" class="btn ghost" href="#" download="lk_patched.img" style="display:none;text-decoration:none;text-align:center;flex:1">⬇ Скачать lk_patched.img</a>
+        <a id="dlImg" class="btn ghost" href="#" download="lk_patched.img" style="display:none;text-decoration:none;text-align:center;flex:1" data-i18n="file.downloadPatched">⬇ Скачать lk_patched.img</a>
       </div>
       <div class="hash" id="patchHash"></div>
     </article>
 
     <!-- карточка 2: подпись токена -->
     <article class="card">
-      <div class="c-head"><span class="num">02</span><h2>Подпись токена</h2><span class="c-tag">auth</span></div>
-      <p class="c-desc">Вставьте токен, полученный от устройства — на выходе подпись signature.bin.</p>
-      <p class="disclaimer">⚠️ Определение прошивки/устройства эвристическое. Патч и прошивка LK выполняются на ваш страх и риск.</p>
-      <label class="lbl" for="token">ТОКЕН (HEX / BASE64)</label>
-      <textarea id="token" spellcheck="false" placeholder="Вставьте токен…"></textarea>
-      <label class="lbl" for="fingerprint" style="margin-top:10px">FINGERPRINT (необязательно, для сверки ОС)</label>
+      <div class="c-head"><span class="num">02</span><h2 data-i18n="token.title">Подпись токена</h2><span class="c-tag">auth</span></div>
+      <p class="c-desc" data-i18n="token.desc">Вставьте токен, полученный от устройства — на выходе подпись signature.bin.</p>
+      <p class="disclaimer" data-i18n="warning.disclaimer">⚠️ Определение прошивки/устройства эвристическое. Патч и прошивка LK выполняются на ваш страх и риск.</p>
+      <label class="lbl" for="token" data-i18n="label.token">ТОКЕН (HEX / BASE64)</label>
+      <textarea id="token" spellcheck="false" data-i18n-placeholder="token.placeholder" placeholder="Вставьте токен…"></textarea>
+      <label class="lbl" for="fingerprint" style="margin-top:10px" data-i18n="label.fingerprint">FINGERPRINT (необязательно, для сверки ОС)</label>
       <input id="fingerprint" type="text" spellcheck="false" placeholder="POCO/fleur_p_ru/fleur:13/.../TKERUXM:user/release-keys" style="width:100%;background:rgba(0,0,0,.35);border:1px solid var(--border);border-radius:12px;color:var(--text);font:12px var(--mono);padding:10px 12px">
       <div class="webusb-row">
-        <button id="connectDeviceBtn" class="btn ghost" style="flex:1" title="Подключить Android-телефон через USB">🔌 Подключить телефон</button>
-        <span id="deviceStatus" class="device-status">Не подключено</span>
+        <button id="connectDeviceBtn" class="btn ghost" style="flex:1" data-i18n="webusb.connectPhone" data-i18n-title="webusb.connectAndroidPhone" title="Подключить Android-телефон через USB">🔌 Подключить телефон</button>
+        <span id="deviceStatus" class="device-status" data-i18n="webusb.notConnected">Не подключено</span>
       </div>
       <div class="device-info" id="deviceInfo" style="display:none"></div>
       <div class="os-warning" id="osWarning">
-        <b id="osWarningTitle">Предупреждение:</b> <span id="osWarningText"></span>
+        <b id="osWarningTitle" data-i18n="warning.prefix">Предупреждение:</b> <span id="osWarningText"></span>
       </div>
       <div class="token-checklist" id="tokenChecklist" style="display:none">
         <div class="token-checklist-item" id="tokenBase64"><span>⏳</span><span>Base64</span></div>
-        <div class="token-checklist-item" id="tokenPrefix"><span>⏳</span><span>Префикс 0x55</span></div>
-        <div class="token-checklist-item" id="tokenDevice"><span>⏳</span><span>Устройство</span></div>
+        <div class="token-checklist-item" id="tokenPrefix"><span>⏳</span><span data-i18n="token.prefix0x55">Префикс 0x55</span></div>
+        <div class="token-checklist-item" id="tokenDevice"><span>⏳</span><span data-i18n="token.device">Устройство</span></div>
       </div>
 
       <div class="row" style="margin-top:14px">
-        <button id="btnSign" class="btn primary" disabled>Подписать → signature.bin</button>
+        <button id="btnSign" class="btn primary" disabled data-i18n="file.signTo">Подписать → signature.bin</button>
       </div>
       <div class="hash" id="signHash"></div>
 
       <details class="token-explain">
-        <summary>Что такое токен и зачем подпись?</summary>
-        <p>Токен приходит от вашего телефона по команде <code>fastboot oem get_token</code>. Он <b>уникален для каждого устройства</b> и содержит имя модели (например, «fleur») — поэтому не у всех одинаковый.</p>
-        <p>Подпись <code>signature.bin</code> — это математическая операция над токеном вашим приватным ключом. Телефон проверяет её публичным ключом, который вшит в <b>пропатченный</b> <code>lk_patched.img</code>. Совпало — разблокирован.</p>
-        <p><b>Важно:</b> патч и подпись должны использовать <b>один и тот же</b> <code>private.pem</code>. Если потерять или перепутать ключ — телефон откажет, придётся перепатчивать.</p>
+        <summary data-i18n="faq.summary">Что такое токен и зачем подпись?</summary>
+        <p data-i18n-html="faq.p1">Токен приходит от вашего телефона по команде <code>fastboot oem get_token</code>. Он <b>уникален для каждого устройства</b> и содержит имя модели (например, «fleur») — поэтому не у всех одинаковый.</p>
+        <p data-i18n-html="faq.p2">Подпись <code>signature.bin</code> — это математическая операция над токеном вашим приватным ключом. Телефон проверяет её публичным ключом, который вшит в <b>пропатченный</b> <code>lk_patched.img</code>. Совпало — разблокирован.</p>
+        <p data-i18n-html="faq.p3"><b>Важно:</b> патч и подпись должны использовать <b>один и тот же</b> <code>private.pem</code>. Если потерять или перепутать ключ — телефон откажет, придётся перепатчивать.</p>
       </details>
     </article>
   </section>
 
   <!-- token visualization: base64 <-> bytes mapping (own block before log) -->
   <section class="card" id="tokenVizCard" style="display:none">
-    <div class="c-head"><h2 style="margin:0;font-size:15px">Визуализация токена</h2></div>
+    <div class="c-head"><h2 style="margin:0;font-size:15px" data-i18n="visualization.title">Визуализация токена</h2></div>
     <div id="token-viz-status" role="status" aria-live="polite"></div>
     <div class="token-viz-grid">
       <div class="pane">
         <h3>Base64</h3>
-        <div id="b64-view" class="mono interactive" tabindex="0" aria-label="Base64 представление токена"></div>
+        <div id="b64-view" class="mono interactive" tabindex="0" data-i18n-attr="aria-label:token.base64View" aria-label="Base64 представление токена"></div>
       </div>
       <div class="pane">
         <h3>Bytes</h3>
-        <div id="hex-view" class="mono interactive" tabindex="0" aria-label="Байтовое представление токена"></div>
+        <div id="hex-view" class="mono interactive" tabindex="0" data-i18n-attr="aria-label:token.bytesView" aria-label="Байтовое представление токена"></div>
       </div>
     </div>
   </section>
 
   <!-- журнал -->
   <section class="card log-card">
-    <div class="c-head"><h2 style="margin:0;font-size:15px">Журнал</h2>
-      <button id="btnClear" class="btn ghost mini" style="margin-left:auto">очистить</button></div>
+    <div class="c-head"><h2 style="margin:0;font-size:15px" data-i18n="log.title">Журнал</h2>
+      <button id="btnClear" class="btn ghost mini" style="margin-left:auto" data-i18n="common.clear">очистить</button></div>
     <pre id="log" aria-live="polite"></pre>
   </section>
 </main>
 
+<script>
+// I18N runtime: inline dictionary + t()/tHtml()/initI18n().
+// Language is picked from the browser (navigator.languages), falls back to ru.
+(() => {
+  'use strict';
+
+  const I18N = {
+    ru: {
+      'meta.title': 'MTK Forge — патчер lk.img (Pyodide/WASM)',
+      'header.tag': 'ПАТЧЕР ПРОШИВОК MEDIATEK · PYODIDE/WASM',
+      'hero.h1': 'Разблокировка <span class="grad">MediaTek</span><br>прямо в браузере',
+      'hero.desc': 'Патч загрузчика lk.img и подпись токенов выполняются локально на вашем устройстве. Файлы и ключи никуда не отправляются.',
+
+      'patch.title': 'Патч lk.img',
+      'patch.desc': 'Загрузите образ — на выходе получите пропатченный lk_patched.img и приватный ключ private.pem.',
+      'token.title': 'Подпись токена',
+      'token.desc': 'Вставьте токен, полученный от устройства — на выходе подпись signature.bin.',
+
+      'warning.disclaimer': '⚠️ Определение прошивки/устройства эвристическое. Патч и прошивка LK выполняются на ваш страх и риск.',
+      'label.token': 'ТОКЕН (HEX / BASE64)',
+      'label.fingerprint': 'FINGERPRINT (необязательно, для сверки ОС)',
+      'webusb.connectPhone': '🔌 Подключить телефон',
+      'warning.prefix': 'Предупреждение:',
+
+      'faq.summary': 'Что такое токен и зачем подпись?',
+      'faq.p1': 'Токен приходит от вашего телефона по команде <code>fastboot oem get_token</code>. Он <b>уникален для каждого устройства</b> и содержит имя модели (например, «fleur») — поэтому не у всех одинаковый.',
+      'faq.p2': 'Подпись <code>signature.bin</code> — это математическая операция над токеном вашим приватным ключом. Телефон проверяет её публичным ключом, который вшит в <b>пропатченный</b> <code>lk_patched.img</code>. Совпало — разблокирован.',
+      'faq.p3': '<b>Важно:</b> патч и подпись должны использовать <b>один и тот же</b> <code>private.pem</code>. Если потерять или перепутать ключ — телефон откажет, придётся перепатчивать.',
+
+      'visualization.title': 'Визуализация токена',
+      'log.title': 'Журнал',
+      'common.clear': 'очистить',
+      'token.placeholder': 'Вставьте токен…',
+
+      'webusb.notSupported': 'WebUSB не поддерживается. Используйте Chrome/Edge.',
+      'webusb.requiresHttps': 'WebUSB требует HTTPS.',
+      'webusb.unavailable': 'WebUSB недоступен',
+      'webusb.chooseDevice': 'Выберите устройство…',
+      'webusb.connectingTo': 'Подключение к {name}…',
+      'webusb.confirmAccess': 'Подтвердите доступ на экране телефона…',
+      'webusb.timeout': 'Истекло время ожидания. Разблокируйте экран телефона и подтвердите доступ.',
+      'webusb.libsLoadFailed': 'Не удалось загрузить библиотеки',
+      'webusb.reading': 'Чтение данных…',
+      'webusb.dataReceived': '✓ Данные получены',
+      'webusb.noFingerprint': 'Нет fingerprint',
+      'webusb.readError': 'Ошибка чтения: {error}',
+      'webusb.notConnected': 'Не подключено',
+      'webusb.disconnected': 'Отключено',
+      'webusb.deviceNotSelected': 'Устройство не выбрано',
+      'webusb.deviceDisconnected': 'Устройство отключено',
+      'webusb.interfaceBusy': 'USB-интерфейс занят другим приложением. Закройте Android Studio, scrcpy или выполните `adb kill-server` в терминале, затем переподключите кабель.',
+      'webusb.error': 'Ошибка: {error}',
+      'webusb.loadingLibs': 'Загрузка библиотек…',
+      'webusb.connectAndroidPhone': 'Подключить Android-телефон через USB',
+      'webusb.locked': 'Заблокирован',
+      'webusb.unlocked': 'Разблокирован',
+      'webusb.unknown': 'Неизвестно',
+
+      'token.base64View': 'Base64 представление токена',
+      'token.bytesView': 'Байтовое представление токена',
+      'token.invalidBase64Char': 'Недопустимый символ Base64',
+      'token.invalidPadding': 'Некорректный padding',
+      'token.invalidBase64Length': 'Некорректная длина Base64',
+      'token.invalidBase64Chars': 'Недопустимые символы Base64',
+      'token.paddingInsideData': 'Padding внутри данных',
+      'token.tooLong': 'Токен слишком длинный',
+      'token.prefix0x55': 'Префикс 0x55',
+      'token.device': 'Устройство',
+      'visualization.msg': 'Визуализация: {msg}',
+
+      'status.preparingCrypto': 'Готовим криптографию…',
+      'status.unpackingWasm': 'Распаковываем WASM-модули…',
+      'status.loadingPyodide': 'Загружаем Pyodide…',
+      'status.pyodideLoading': 'Загрузка Pyodide…',
+      'status.pyodideReady': 'Pyodide готов',
+      'status.coreReady': 'Ядро загружено. Можно начинать. (ключ: {key})',
+      'status.patching': 'Патчим lk.img…',
+      'status.patchDone': 'Готово: lk_patched.img · SHA-256 {hash}…',
+      'status.signing': 'Подписываем токен…',
+      'status.signDone': 'Готово: signature.bin сохранён · SHA-256 {hash}…',
+      'status.exportingPem': 'Экспорт private.pem…',
+      'status.downloadingPem': 'Скачивается private.pem',
+      'status.pemSaved': 'private.pem сохранён на диск.',
+      'status.running': 'Выполняется…',
+      'status.almostReady': 'Почти готово…',
+      'status.done': 'Готово',
+      'status.sha256': 'SHA-256: {hash}',
+      'status.parseError': 'Ошибка анализа',
+      'status.diagnosticError': 'Диагностика: ошибка {code}',
+      'status.analyzeFailed': '⚠️ не удалось проанализировать',
+      'status.checkImage': '⚠️ проверьте образ',
+      'status.imageRecognized': '✅ образ распознан',
+      'status.mismatch': '✗ не совпадает',
+      'status.no': 'нет',
+      'status.invalid': 'НЕВЕРНАЯ',
+      'status.noUpper': 'НЕТ',
+      'status.sessionStorageUnavailable': 'sessionStorage недоступен: {error}',
+      'status.workerUnavailable': 'Не удалось связаться с worker.js',
+      'status.bytesRange': 'Байты {from}–{to}: {hex}{note} | ASCII: {ascii}',
+      'status.fileSelected': 'Файл выбран: {name}',
+      'status.diagnostics': 'Диагностика: magic={magic} ({hex}) · OEM-ключ: {key} · разделы: {parts}',
+
+      'key.waitInit': 'Ключ: ожидание инициализации…',
+      'key.newGenerated': 'Ключ: новый (сгенерирован)',
+      'key.importedFromFile': 'Ключ: импортирован из файла',
+      'key.fromSession': 'Ключ: из этой вкладки (session)',
+      'key.restoredFromSession': 'Ключ восстановлен из этой вкладки.',
+      'key.importedSavedSession': 'Ключ импортирован и сохранён в этой вкладке.',
+      'key.importFrom': 'Импорт ключа из {name}…',
+      'key.expectPrivatePem': 'Ожидается private.pem',
+      'key.load': 'Загрузить ключ',
+      'key.save': 'Сохранить ключ',
+      'key.removeFile': 'Убрать файл',
+      'key.replace': 'Заменить',
+
+      'file.dropLkImg': 'Перетащите lk.img сюда',
+      'file.orClick': 'или нажмите для выбора .img / .bin',
+      'file.notLkImage': 'Файл не похож на образ LK. Ожидается .img или .bin.',
+      'file.tooLarge': 'Файл слишком большой ({mb} МБ). Максимум 64 МБ.',
+      'file.downloadPatched': '⬇ Скачать lk_patched.img',
+      'file.patchTo': 'Патчить → lk_patched.img',
+      'file.signTo': 'Подписать → signature.bin'
+    },
+
+    en: {
+      'meta.title': 'MTK Forge — lk.img patcher (Pyodide/WASM)',
+      'header.tag': 'MEDIATEK FIRMWARE PATCHER · PYODIDE/WASM',
+      'hero.h1': 'Unlock <span class="grad">MediaTek</span><br>right in the browser',
+      'hero.desc': 'The lk.img bootloader patch and token signing are performed locally on your device. Files and keys are not sent anywhere.',
+
+      'patch.title': 'Patch lk.img',
+      'patch.desc': 'Upload an image — you will get a patched lk_patched.img and a private key private.pem.',
+      'token.title': 'Token signing',
+      'token.desc': 'Paste the token received from the device — the output is signature.bin.',
+
+      'warning.disclaimer': '⚠️ Firmware/device detection is heuristic. Patching and flashing LK are at your own risk.',
+      'label.token': 'TOKEN (HEX / BASE64)',
+      'label.fingerprint': 'FINGERPRINT (optional, OS verification)',
+      'webusb.connectPhone': '🔌 Connect phone',
+      'warning.prefix': 'Warning:',
+
+      'faq.summary': 'What is a token and why sign it?',
+      'faq.p1': 'The token comes from your phone via the <code>fastboot oem get_token</code> command. It is <b>unique for each device</b> and contains the model name (e.g. «fleur») — that is why not everyone has the same one.',
+      'faq.p2': 'The <code>signature.bin</code> signature is a mathematical operation on the token with your private key. The phone verifies it with the public key embedded in the <b>patched</b> <code>lk_patched.img</code>. If it matches — unlocked.',
+      'faq.p3': '<b>Important:</b> the patch and the signature must use <b>the same</b> <code>private.pem</code>. If you lose or mix up the key, the phone will refuse — you will have to repatch.',
+
+      'visualization.title': 'Token visualization',
+      'log.title': 'Log',
+      'common.clear': 'clear',
+      'token.placeholder': 'Paste token…',
+
+      'webusb.notSupported': 'WebUSB is not supported. Use Chrome/Edge.',
+      'webusb.requiresHttps': 'WebUSB requires HTTPS.',
+      'webusb.unavailable': 'WebUSB is unavailable',
+      'webusb.chooseDevice': 'Choose a device…',
+      'webusb.connectingTo': 'Connecting to {name}…',
+      'webusb.confirmAccess': 'Confirm access on the phone screen…',
+      'webusb.timeout': 'Timed out. Unlock the phone screen and confirm access.',
+      'webusb.libsLoadFailed': 'Failed to load libraries',
+      'webusb.reading': 'Reading data…',
+      'webusb.dataReceived': '✓ Data received',
+      'webusb.noFingerprint': 'No fingerprint',
+      'webusb.readError': 'Read error: {error}',
+      'webusb.notConnected': 'Not connected',
+      'webusb.disconnected': 'Disconnected',
+      'webusb.deviceNotSelected': 'No device selected',
+      'webusb.deviceDisconnected': 'Device disconnected',
+      'webusb.interfaceBusy': 'The USB interface is busy with another application. Close Android Studio, scrcpy, or run `adb kill-server` in a terminal, then reconnect the cable.',
+      'webusb.error': 'Error: {error}',
+      'webusb.loadingLibs': 'Loading libraries…',
+      'webusb.connectAndroidPhone': 'Connect an Android phone via USB',
+      'webusb.locked': 'Locked',
+      'webusb.unlocked': 'Unlocked',
+      'webusb.unknown': 'Unknown',
+
+      'token.base64View': 'Base64 token representation',
+      'token.bytesView': 'Byte token representation',
+      'token.invalidBase64Char': 'Invalid Base64 character',
+      'token.invalidPadding': 'Invalid padding',
+      'token.invalidBase64Length': 'Invalid Base64 length',
+      'token.invalidBase64Chars': 'Invalid Base64 characters',
+      'token.paddingInsideData': 'Padding inside data',
+      'token.tooLong': 'Token is too long',
+      'token.prefix0x55': 'Prefix 0x55',
+      'token.device': 'Device',
+      'visualization.msg': 'Visualization: {msg}',
+
+      'status.preparingCrypto': 'Preparing cryptography…',
+      'status.unpackingWasm': 'Unpacking WASM modules…',
+      'status.loadingPyodide': 'Loading Pyodide…',
+      'status.pyodideLoading': 'Pyodide loading…',
+      'status.pyodideReady': 'Pyodide is ready',
+      'status.coreReady': 'Core loaded. You can start. (key: {key})',
+      'status.patching': 'Patching lk.img…',
+      'status.patchDone': 'Done: lk_patched.img · SHA-256 {hash}…',
+      'status.signing': 'Signing token…',
+      'status.signDone': 'Done: signature.bin saved · SHA-256 {hash}…',
+      'status.exportingPem': 'Exporting private.pem…',
+      'status.downloadingPem': 'Downloading private.pem',
+      'status.pemSaved': 'private.pem saved to disk.',
+      'status.running': 'Running…',
+      'status.almostReady': 'Almost ready…',
+      'status.done': 'Done',
+      'status.sha256': 'SHA-256: {hash}',
+      'status.parseError': 'Parse error',
+      'status.diagnosticError': 'Diagnostics: error {code}',
+      'status.analyzeFailed': '⚠️ failed to analyze',
+      'status.checkImage': '⚠️ check the image',
+      'status.imageRecognized': '✅ image recognized',
+      'status.mismatch': '✗ mismatch',
+      'status.no': 'no',
+      'status.invalid': 'INVALID',
+      'status.noUpper': 'NO',
+      'status.sessionStorageUnavailable': 'sessionStorage is unavailable: {error}',
+      'status.workerUnavailable': 'Failed to contact worker.js',
+      'status.bytesRange': 'Bytes {from}–{to}: {hex}{note} | ASCII: {ascii}',
+      'status.fileSelected': 'File selected: {name}',
+      'status.diagnostics': 'Diagnostics: magic={magic} ({hex}) · OEM key: {key} · partitions: {parts}',
+
+      'key.waitInit': 'Key: waiting for initialization…',
+      'key.newGenerated': 'Key: new (generated)',
+      'key.importedFromFile': 'Key: imported from file',
+      'key.fromSession': 'Key: from this tab (session)',
+      'key.restoredFromSession': 'Key restored from this tab.',
+      'key.importedSavedSession': 'Key imported and saved in this tab.',
+      'key.importFrom': 'Import key from {name}…',
+      'key.expectPrivatePem': 'private.pem expected',
+      'key.load': 'Load key',
+      'key.save': 'Save key',
+      'key.removeFile': 'Remove file',
+      'key.replace': 'Replace',
+
+      'file.dropLkImg': 'Drag lk.img here',
+      'file.orClick': 'or click to choose .img / .bin',
+      'file.notLkImage': 'The file does not look like an LK image. Expected .img or .bin.',
+      'file.tooLarge': 'File is too large ({mb} MB). Maximum is 64 MB.',
+      'file.downloadPatched': '⬇ Download lk_patched.img',
+      'file.patchTo': 'Patch → lk_patched.img',
+      'file.signTo': 'Sign → signature.bin'
+    }
+  };
+
+  function detectLang() {
+    const candidates = [];
+    if (Array.isArray(navigator.languages)) candidates.push(...navigator.languages);
+    if (navigator.language) candidates.push(navigator.language);
+    for (const candidate of candidates) {
+      const code = String(candidate || '').toLowerCase();
+      if (code.startsWith('en')) return 'en';
+      if (code.startsWith('ru')) return 'ru';
+    }
+    return 'ru';
+  }
+
+  const lang = detectLang();
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (ch) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[ch]);
+  }
+
+  function lookup(key) {
+    const primary = I18N[lang] && I18N[lang][key];
+    if (typeof primary === 'string') return primary;
+    const fallback = I18N.ru && I18N.ru[key];
+    if (typeof fallback === 'string') return fallback;
+    return key;
+  }
+
+  function format(template, params, escapeParams) {
+    if (!params) return template;
+    return template.replace(/\{(\w+)\}/g, (match, name) => {
+      if (!Object.prototype.hasOwnProperty.call(params, name)) return match;
+      const raw = params[name];
+      const text = raw == null ? '' : String(raw);
+      return escapeParams ? escapeHtml(text) : text;
+    });
+  }
+
+  function t(key, params) { return format(lookup(key), params, false); }
+  // Use only for trusted static dictionary HTML. Parameters are escaped.
+  function tHtml(key, params) { return format(lookup(key), params, true); }
+
+  function applyTranslations() {
+    document.documentElement.setAttribute('lang', lang);
+    document.title = t('meta.title');
+    document.querySelectorAll('[data-i18n]').forEach((el) => {
+      el.textContent = t(el.getAttribute('data-i18n'));
+    });
+    document.querySelectorAll('[data-i18n-html]').forEach((el) => {
+      el.innerHTML = tHtml(el.getAttribute('data-i18n-html'));
+    });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
+      el.setAttribute('placeholder', t(el.getAttribute('data-i18n-placeholder')));
+    });
+    document.querySelectorAll('[data-i18n-title]').forEach((el) => {
+      el.setAttribute('title', t(el.getAttribute('data-i18n-title')));
+    });
+    document.querySelectorAll('[data-i18n-attr]').forEach((el) => {
+      const rules = el.getAttribute('data-i18n-attr') || '';
+      rules.split(';').forEach((rule) => {
+        const [attr, key] = rule.split(':').map((part) => (part || '').trim());
+        if (attr && key) el.setAttribute(attr, t(key));
+      });
+    });
+  }
+
+  window.I18N_LANG = lang;
+  window.t = t;
+  window.tHtml = tHtml;
+  window.initI18n = applyTranslations;
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', applyTranslations);
+  } else {
+    applyTranslations();
+  }
+})();
+</script>
 <script>
 'use strict';
 const $=s=>document.querySelector(s);
@@ -501,28 +821,28 @@ function setKeyStatus(source){
   if(source==='local'){
     els.keyDot.style.background='#22d07a';
     els.keyDot.style.boxShadow='0 0 10px #22d07a';
-    els.keyStatusText.textContent='Ключ: из этой вкладки (session)';
+    els.keyStatusText.textContent=t('key.fromSession');
     els.keyStatus.classList.add('active');
   }else if(source==='imported'){
     els.keyDot.style.background='#00d4ff';
     els.keyDot.style.boxShadow='0 0 10px #00d4ff';
-    els.keyStatusText.textContent='Ключ: импортирован из файла';
+    els.keyStatusText.textContent=t('key.importedFromFile');
     els.keyStatus.classList.add('active');
   }else if(source==='new'){
     els.keyDot.style.background='#7c5cff';
     els.keyDot.style.boxShadow='0 0 10px #7c5cff';
-    els.keyStatusText.textContent='Ключ: новый (сгенерирован)';
+    els.keyStatusText.textContent=t('key.newGenerated');
     els.keyStatus.classList.add('active');
   }else{
     els.keyDot.style.background='#f5a623';
     els.keyDot.style.boxShadow='0 0 10px #f5a623';
-    els.keyStatusText.textContent='Ключ: ожидание инициализации…';
+    els.keyStatusText.textContent=t('key.waitInit');
   }
 }
 
 function saveJwk(jwk){
   try{sessionStorage.setItem('lk-unlock-jwk',JSON.stringify(jwk));}
-  catch(e){log('sessionStorage недоступен: '+e.message);}
+  catch(e){log(t('status.sessionStorageUnavailable',{error:e.message}));}
 }
 function loadJwk(){
   try{
@@ -588,14 +908,14 @@ function analyzeToken(){
         // Match device name from fingerprint vs token device_name.
         const devMatch = matchDeviceFromFingerprint(fp, r.device_name);
         if(devMatch!==null){
-          setCheck('#tokenDevice', devMatch, devMatch?(r.device_name+' ✓'):(r.device_name+' ✗ не совпадает'));
+          setCheck('#tokenDevice', devMatch, devMatch?(r.device_name+' ✓'):(r.device_name+' '+t('status.mismatch')));
         }
       }).catch(()=>{});
     } else if(!fp){
       els.osWarning.classList.remove('show');
     }
   }).catch(()=>{
-    setCheck('#tokenBase64',false,'Ошибка анализа');
+    setCheck('#tokenBase64',false,t('status.parseError'));
     setCheck('#tokenPrefix',false,'');
     setCheck('#tokenDevice',false,'');
     els.sign.disabled=true;
@@ -606,12 +926,12 @@ els.fingerprint.addEventListener('input',()=>{clearTimeout(tokenTimer);tokenTime
 
 function busy(btn,fn){
   state.busy=btn;const old=btn.textContent;
-  btn.textContent='Выполняется…';sync();
+  btn.textContent=t('status.running');sync();
   Promise.resolve().then(fn)
-    .catch(e=>log('Ошибка: '+(e&&e.message||e)))
+    .catch(e=>log(t('webusb.error',{error:(e&&e.message)||e})))
     .finally(()=>{state.busy=null;btn.textContent=old;sync();});
 }
-function showHash(sel,h){const el=$(sel);el.textContent='SHA-256: '+h;el.classList.add('on');}
+function showHash(sel,h){const el=$(sel);el.textContent=t('status.sha256',{hash:h});el.classList.add('on');}
 
 /* ================= выбор файла / drag-and-drop ================= */
 const MAX_IMG_BYTES = 64 * 1024 * 1024;  // 64 MB guard against OOM
@@ -637,11 +957,11 @@ async function onFile(f){
   const name = f.name || '';
   const ext = name.toLowerCase().split('.').pop();
   if(!['img','bin'].includes(ext)){
-    setDropState('error', `Файл не похож на образ LK. Ожидается .img или .bin.`);
+    setDropState('error', t('file.notLkImage'));
     return;
   }
   if(f.size > MAX_IMG_BYTES){
-    setDropState('error', `Файл слишком большой (${(f.size/1048576).toFixed(1)} МБ). Максимум 64 МБ.`);
+    setDropState('error', t('file.tooLarge',{mb:(f.size/1048576).toFixed(1)}));
     return;
   }
 
@@ -650,7 +970,7 @@ async function onFile(f){
 
   state.buf = buf;
   state.fileName = name;
-  log('Файл выбран: '+name);
+  log(t('status.fileSelected',{name}));
   runDiag(mySeq);
   sync();
 }
@@ -663,20 +983,20 @@ async function runDiag(mySeq){
     const diagBuf = state.buf.slice(0, Math.min(state.buf.byteLength, 2*1024*1024));
     const d=await window.lkUnlock.diagnose(diagBuf);
     if(mySeq !== fileSeq) return;  // stale result
-    const parts=d.lk_partitions&&d.lk_partitions.length?d.lk_partitions.join(','):'нет';
+    const parts=d.lk_partitions&&d.lk_partitions.length?d.lk_partitions.join(','):t('status.no');
     const key=d.has_oem_key?`да (0x${(d.oem_key_offset||0).toString(16)})`:'НЕТ';
     const magic=d.magic_ok?'OK':'НЕВЕРНАЯ';
-    log(`Диагностика: magic=${magic} (${d.magic_hex}) · OEM-ключ: ${key} · разделы: ${parts}`);
+    log(t('status.diagnostics',{magic,hex:d.magic_hex,key,parts}));
     const ok=d.magic_ok&&d.has_oem_key;
     els.fileCardName.textContent = state.fileName;
-    els.fileCardMeta.innerHTML = `${(state.buf.byteLength/1048576).toFixed(2)} МБ · <span style="color:${ok?'#22d07a':'#f5a623'}">${ok?'✅ образ распознан':'⚠️ проверьте образ'}</span>`;
+    els.fileCardMeta.innerHTML = `${(state.buf.byteLength/1048576).toFixed(2)} МБ · <span style="color:${ok?'#22d07a':'#f5a623'}">${ok?t('status.imageRecognized'):t('status.checkImage')}</span>`;
     setDropState(ok?'loaded':'warn');
   }catch(e){
     if(mySeq !== fileSeq) return;
     // Diagnostics failed, but keep the file loaded - just warn.
-    log('Диагностика: ошибка '+e.message);
+    log(t('status.diagnosticError',{code:e.message}));
     els.fileCardName.textContent = state.fileName;
-    els.fileCardMeta.innerHTML = `${(state.buf.byteLength/1048576).toFixed(2)} МБ · <span style="color:#f5a623">⚠️ не удалось проанализировать</span>`;
+    els.fileCardMeta.innerHTML = `${(state.buf.byteLength/1048576).toFixed(2)} МБ · <span style="color:#f5a623">${t('status.analyzeFailed')}</span>`;
     setDropState('loaded');
   }
 }
@@ -701,29 +1021,29 @@ els.pemFile.addEventListener('change',e=>{
   const f=e.target.files[0];
   if(!f)return;
   busy(els.importBtn,async()=>{
-    log('Импорт ключа из '+f.name+'…');
+    log(t('key.importFrom',{name:f.name}));
     const text=await f.text();
     const r=await window.lkUnlock.importPem(text);
     if(r&&r.jwk){
       saveJwk(r.jwk);
       setKeyStatus('imported');
-      log('Ключ импортирован и сохранён в этой вкладке.');
+      log(t('key.importedSavedSession'));
     }
   });
   els.pemFile.value='';
 });
 
 els.exportBtn.onclick=()=>busy(els.exportBtn,async()=>{
-  log('Экспорт private.pem…');
+  log(t('status.exportingPem'));
   const r=await window.lkUnlock.getPem();
   const pem=typeof r==='string'?r:(r&&r.pem);
   saveBlob(new TextEncoder().encode(pem),'private.pem');
-  log('private.pem сохранён на диск.');
+  log(t('status.pemSaved'));
 });
 
 /* ================= действия ================= */
 els.patch.onclick=()=>busy(els.patch,async()=>{
-  log('Патчим lk.img…');
+  log(t('status.patching'));
   const r=await window.lkUnlock.patchBuffer(state.buf.slice(0));
   state.pem=r.pem;
   // Show an active download link instead of auto-clicking after await
@@ -733,19 +1053,19 @@ els.patch.onclick=()=>busy(els.patch,async()=>{
   a.href=url; a.style.display='flex';
   setTimeout(()=>URL.revokeObjectURL(url),30000);
   showHash('#patchHash',r.sha256);
-  log('Готово: lk_patched.img · SHA-256 '+r.sha256.slice(0,16)+'…');
+  log(t('status.patchDone',{hash:r.sha256.slice(0,16)}));
 });
 els.sign.onclick=()=>busy(els.sign,async()=>{
-  log('Подписываем токен…');
+  log(t('status.signing'));
   const r=await window.lkUnlock.signToken(els.token.value.trim());
   saveBlob(r.sig,'signature.bin');
   showHash('#signHash',r.sha256);
-  log('Готово: signature.bin сохранён · SHA-256 '+r.sha256.slice(0,16)+'…');
+  log(t('status.signDone',{hash:r.sha256.slice(0,16)}));
 });
 
 /* ================= сплэш ================= */
 const splash=$('#splash'),bar=$('#splashBar'),pct=$('#splashPct'),sStat=$('#splashStatus');
-const phrases=['Загружаем Pyodide…','Распаковываем WASM-модули…','Готовим криптографию…','Почти готово…'];
+const phrases=[t('status.loadingPyodide'),t('status.unpackingWasm'),t('status.preparingCrypto'),t('status.almostReady')];
 let prog=0,tick=0,splashDone=false;
 const splashTimer=setInterval(()=>{
   if(splashDone)return;
@@ -756,7 +1076,7 @@ function paint(){bar.style.width=prog+'%';pct.textContent=Math.round(prog)+'%';}
 function setSplash(p){prog=Math.max(prog,p);paint();}
 function finishSplash(){
   if(splashDone)return;splashDone=true;clearInterval(splashTimer);
-  prog=100;paint();sStat.textContent='Готово';
+  prog=100;paint();sStat.textContent=t('status.done');
   setTimeout(()=>{splash.classList.add('hide');setTimeout(()=>splash.remove(),700);},350);
 }
 
@@ -768,7 +1088,7 @@ function finishSplash(){
   if(stored&&stored.kty==='RSA'){
     jwk=stored;
     source='local';
-    log('Ключ восстановлен из этой вкладки.');
+    log(t('key.restoredFromSession'));
   }
 
   for(let i=1;i<=60&&!state.ready;i++){
@@ -784,14 +1104,14 @@ function finishSplash(){
       await sleep(1200);
     }
   }
-  sStat.textContent='Не удалось связаться с worker.js';
+  sStat.textContent=t('status.workerUnavailable');
 })();
 
 function onReady(source){
   state.ready=true;
-  els.badge.classList.add('on');els.badgeText.textContent='Pyodide готов';
+  els.badge.classList.add('on');els.badgeText.textContent=t('status.pyodideReady');
   setKeyStatus(source);
-  log('Ядро загружено. Можно начинать. (ключ: '+source+')');
+  log(t('status.coreReady',{key:source}));
   finishSplash();sync();
   showKeyFingerprint();
 }
@@ -828,16 +1148,16 @@ async function showKeyFingerprint(){
 
   function normalize(raw){
     const norm = raw.replace(/\s+/g,'');
-    if(norm.length>MAX_B64) throw new Error('Токен слишком длинный');
+    if(norm.length>MAX_B64) throw new Error(t('token.tooLong'));
     if(!norm) return {norm:'',dataChars:0};
     const m = norm.match(/=+$/);
     const pad = m?m[0].length:0;
-    if(pad>2) throw new Error('Некорректный padding');
+    if(pad>2) throw new Error(t('token.invalidPadding'));
     const data = pad?norm.slice(0,-pad):norm;
-    if(data.includes('=')) throw new Error('Padding внутри данных');
-    if(!/^[A-Za-z0-9+/]*$/.test(data)) throw new Error('Недопустимые символы Base64');
-    if(data.length%4===1) throw new Error('Некорректная длина Base64');
-    if(pad&&(data.length+pad)%4!==0) throw new Error('Некорректный padding');
+    if(data.includes('=')) throw new Error(t('token.paddingInsideData'));
+    if(!/^[A-Za-z0-9+/]*$/.test(data)) throw new Error(t('token.invalidBase64Chars'));
+    if(data.length%4===1) throw new Error(t('token.invalidBase64Length'));
+    if(pad&&(data.length+pad)%4!==0) throw new Error(t('token.invalidPadding'));
     return {norm, dataChars:data.length};
   }
   function decode(data){
@@ -845,7 +1165,7 @@ async function showKeyFingerprint(){
     let bits=0,bc=0,pos=0;
     for(let i=0;i<data.length;i++){
       const v = LOOKUP[data.charCodeAt(i)];
-      if(v===64) throw new Error('Недопустимый символ Base64');
+      if(v===64) throw new Error(t('token.invalidBase64Char'));
       bits=(bits<<6)|v; bc+=6;
       if(bc>=8){bc-=8;out[pos++]=(bits>>bc)&0xff;}
     }
@@ -957,7 +1277,7 @@ async function showKeyFingerprint(){
       const[s,e]=sel.bytes; const pn=Math.min(16,e-s);
       const hex=Array.from(st.bytes.slice(s,s+pn)).map(b=>b.toString(16).padStart(2,'0')).join(' ');
       const ascii=Array.from(st.bytes.slice(s,s+pn)).map(b=>(b>=0x20&&b<=0x7e)?String.fromCharCode(b):'.').join('');
-      statusEl.textContent=`Байты ${s}–${e-1}: ${hex}${e-s>pn?'…':''} | ASCII: ${ascii}`;
+      statusEl.textContent=t('status.bytesRange',{from:s,to:e-1,hex,note:e-s>pn?'…':'',ascii});
     } else statusEl.textContent='';
   }
   function clearInt(){st.hover=null;st.pinned=null;st.drag=null;lastPaint.clear();}
@@ -1005,7 +1325,7 @@ async function showKeyFingerprint(){
       if(id!==seq) return;
       st.norm='';st.dataChars=0;st.bytes=new Uint8Array(0);st.segments=[];
       clearInt(); renderBase64(); renderHex(); paint();
-      vizEl.style.display='none'; statusEl.textContent=`Визуализация: ${err.message}`;
+      vizEl.style.display='none'; statusEl.textContent=t('visualization.msg',{msg:err.message});
     }
   }
   let tmr;
@@ -1014,7 +1334,7 @@ async function showKeyFingerprint(){
 
 /* ================= WebUSB ADB: read-only getprop ================= */
 (() => {
-  let adb=null, transport=null, connection=null;
+  let adb=null, transport=null, connection=null, isConnecting=false;
   const connectBtn=els.connectDeviceBtn, statusEl=els.deviceStatus, fpInput=els.fingerprint, infoEl=els.deviceInfo;
   const HOST = location.hostname || 'localhost';
 
@@ -1025,14 +1345,14 @@ async function showKeyFingerprint(){
     statusEl.className='device-status '+type;
   }
   function checkWebUSB(){
-    if(!navigator.usb) return {ok:false, reason:'WebUSB не поддерживается. Используйте Chrome/Edge.'};
+    if(!navigator.usb) return {ok:false, reason:t('webusb.notSupported')};
     if(location.protocol!=='https:'&&location.hostname!=='localhost'&&location.hostname!=='127.0.0.1')
-      return {ok:false, reason:'WebUSB требует HTTPS.'};
+      return {ok:false, reason:t('webusb.requiresHttps')};
     return {ok:true};
   }
   async function loadAdbLibs(){
     if(window.AdbLibs) return window.AdbLibs;
-    setStatus('Загрузка библиотек…','loading');
+    setStatus(t('webusb.loadingLibs'),'loading');
     try{
       const [adbM,webusbM,credM]=await Promise.all([
         import('https://esm.sh/@yume-chan/adb@2.6.2'),
@@ -1042,24 +1362,39 @@ async function showKeyFingerprint(){
       window.AdbLibs={Adb:adbM.Adb, AdbDaemonTransport:adbM.AdbDaemonTransport,
         Manager:webusbM.AdbDaemonWebUsbDeviceManager, CredStore:credM.default};
       return window.AdbLibs;
-    }catch(e){ setStatus('Не удалось загрузить библиотеки','error'); throw e; }
+    }catch(e){ setStatus(t('webusb.libsLoadFailed'),'error'); throw e; }
   }
   async function connectToDevice(){
+    // Guard against double-click: a second attempt would race the first
+    // one and fail with 'claimInterface: Unable to claim interface'.
+    if(isConnecting) return;
+    isConnecting=true;
+    connectBtn.disabled=true;
     const c=checkWebUSB();
     if(!c.ok){ setStatus(c.reason,'error'); return; }
     try{
       const {Adb,AdbDaemonTransport,Manager,CredStore}=await loadAdbLibs();
       const manager=Manager.BROWSER;
-      if(!manager){ setStatus('WebUSB недоступен','error'); return; }
-      setStatus('Выберите устройство…','loading');
+      if(!manager){ setStatus(t('webusb.unavailable'),'error'); return; }
+      setStatus(t('webusb.chooseDevice'),'loading');
       // Always use the native chooser so the user picks the exact device
       // (getDevices()[0] could blindly attach to an old/unplugged one).
       const device = await manager.requestDevice();
-      if(!device){ setStatus('Устройство не выбрано','error'); return; }
-      setStatus('Подключение к '+device.name+'…','loading');
-      connection=await device.connect();
+      if(!device){ setStatus(t('webusb.deviceNotSelected'),'error'); return; }
+      setStatus(t('webusb.connectingTo',{name:device.name}),'loading');
+      try{
+        connection=await device.connect();
+      }catch(claimErr){
+        // The USB interface is held by another program (local adb server,
+        // Android Studio, scrcpy, another tab). WebUSB can't free it from
+        // the sandbox, so tell the user exactly what to do instead.
+        const msg=(claimErr.message||'').toLowerCase();
+        if(msg.includes('claim interface')||msg.includes('claiminterface')||msg.includes('in use'))
+          throw new Error('USB_BLOCKED');
+        throw claimErr;
+      }
       const credentialStore=new CredStore('lk-unlock@'+HOST);
-      setStatus('Подтвердите доступ на экране телефона…','loading');
+      setStatus(t('webusb.confirmAccess'),'loading');
       try{
         // Race the ADB auth against a 20s timeout: if the user misses the
         // RSA prompt on the phone, fail instead of hanging forever.
@@ -1072,7 +1407,7 @@ async function showKeyFingerprint(){
         try{ await connection.close(); }catch(_){}
         connection=null;
         transport=null;
-        if(err.message==='AUTH_TIMEOUT') throw new Error('Истекло время ожидания. Разблокируйте экран телефона и подтвердите доступ.');
+        if(err.message==='AUTH_TIMEOUT') throw new Error(t('webusb.timeout'));
         throw err;
       }
       adb=new Adb(transport);
@@ -1081,13 +1416,20 @@ async function showKeyFingerprint(){
     }catch(e){
       console.error('WebUSB connect error:',e);
       await disconnectDevice(true);
-      setStatus('Ошибка: '+(e.message||e),'error');
+      // claimInterface error: interface held by another program.
+      if(e.message==='USB_BLOCKED')
+        setStatus(t('webusb.interfaceBusy'),'error');
+      else
+        setStatus(t('webusb.error',{error:e.message||e}),'error');
+    }finally{
+      isConnecting=false;
+      connectBtn.disabled=false;
     }
   }
   async function readDeviceProperties(){
     if(!adb) return;
     try{
-      setStatus('Чтение данных…','loading');
+      setStatus(t('webusb.reading'),'loading');
       const [fp,osv,locked]=await Promise.all([
         adb.getProp('ro.build.fingerprint').catch(e=>{console.warn('getprop fingerprint:',e);return '';}),
         adb.getProp('ro.mi.os.version.incremental').catch(e=>{console.warn('getprop os:',e);return '';}),
@@ -1096,19 +1438,19 @@ async function showKeyFingerprint(){
       if(fp){
         fpInput.value=fp;
         fpInput.dispatchEvent(new Event('input',{bubbles:true}));
-        setStatus('✓ Данные получены','connected');
+        setStatus(t('webusb.dataReceived'),'connected');
       } else {
-        setStatus('Нет fingerprint','error');
+        setStatus(t('webusb.noFingerprint'),'error');
       }
       // Show device info via textContent (no innerHTML for device data).
-      const lockedTxt = locked==='0' ? 'Разблокирован' : locked==='?' ? 'Неизвестно' : 'Заблокирован';
+      const lockedTxt = locked==='0' ? t('webusb.unlocked') : locked==='?' ? t('webusb.unknown') : t('webusb.locked');
       infoEl.textContent = `Bootloader: ${lockedTxt} · MI OS: ${osv||'N/A'}`;
       infoEl.style.display='block';
       // Re-run token analysis with the new fingerprint.
       if(typeof analyzeToken==='function') analyzeToken();
     }catch(e){
       console.error('WebUSB read error:',e);
-      setStatus('Ошибка чтения: '+(e.message||e),'error');
+      setStatus(t('webusb.readError',{error:e.message||e}),'error');
     }
   }
   // keepClean=false lets the caller show an error status afterwards.
@@ -1116,17 +1458,17 @@ async function showKeyFingerprint(){
     try{ transport&&await transport.close(); }catch(e){}
     try{ connection&&await connection.close(); }catch(e){}
     transport=null; connection=null; adb=null;
-    if(!keepClean) setStatus('Отключено','default');
+    if(!keepClean) setStatus(t('webusb.disconnected'),'default');
   }
   // Handle physical USB unplug.
   if(navigator.usb) navigator.usb.addEventListener('disconnect',async()=>{
     if(transport||connection) await disconnectDevice();
-    setStatus('Устройство отключено','error');
+    setStatus(t('webusb.deviceDisconnected'),'error');
   });
   connectBtn.addEventListener('click',async()=>{
     if(transport) await disconnectDevice(); else await connectToDevice();
   });
-  setStatus('Не подключено');
+  setStatus(t('webusb.notConnected'));
 })();
 
 /* «прожектор» на карточках */
