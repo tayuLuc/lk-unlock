@@ -35,6 +35,7 @@ import base64
 import hashlib
 import json
 import re
+import struct
 import sys
 import types
 from pathlib import Path
@@ -319,6 +320,369 @@ def get_jwk() -> str:
     return json.dumps(_KEY)
 
 
+_POLICY_STRUCT_FORMAT = "<IIIIIbbbbI"
+_POLICY_STRUCT_SIZE = struct.calcsize(_POLICY_STRUCT_FORMAT)
+_POLICY_NAME_LIMIT = 128
+_POLICY_SCAN_LIMIT = 32 * 1024 * 1024
+_POLICY_DEFAULT_OFFSET_LIMIT = 1024
+_POLICY_HIT_LIMIT = 65536
+_POLICY_PREFERRED_PARTITIONS = (
+    "lk",
+    "lk1",
+    "lk2",
+    "lk_a",
+    "lk_b",
+    "bootloader",
+    "bootloader_a",
+    "bootloader_b",
+    "aboot",
+    "abl",
+    "sbl",
+    "sbl1",
+)
+
+
+def _to_bytes(data):
+    if isinstance(data, bytes):
+        return data
+    if isinstance(data, (bytearray, memoryview)):
+        return bytes(data)
+    try:
+        if hasattr(data, "to_bytes"):
+            return data.to_bytes()
+        return bytes(data)
+    except Exception:
+        return bytes(memoryview(data))
+
+
+def _to_u32(value):
+    try:
+        return int(value) & 0xFFFFFFFF
+    except Exception:
+        try:
+            return int(str(value), 0) & 0xFFFFFFFF
+        except Exception:
+            return 0
+
+
+def _ordered_policy_partitions(partitions):
+    names = list(partitions.keys())
+    lower_to_name = {}
+    for name in names:
+        key = str(name).lower()
+        if key not in lower_to_name:
+            lower_to_name[key] = name
+
+    ordered = []
+
+    for name in _POLICY_PREFERRED_PARTITIONS:
+        real = lower_to_name.get(name.lower())
+        if real is not None and real not in ordered:
+            ordered.append(real)
+
+    for name in names:
+        key = str(name).lower()
+        if name not in ordered and ("lk" in key or "bootloader" in key):
+            ordered.append(name)
+
+    for name in names:
+        if name not in ordered:
+            ordered.append(name)
+
+    return ordered
+
+
+def _find_default_policy_offsets(data):
+    offsets = []
+    pos = data.find(b"default\0")
+    while pos != -1:
+        offsets.append(pos)
+        if len(offsets) >= _POLICY_DEFAULT_OFFSET_LIMIT:
+            break
+        pos = data.find(b"default\0", pos + 1)
+    return offsets
+
+
+def _iter_policy_pointer_hits(data, default_offsets, load_address, address_mask):
+    if not default_offsets or len(data) < 8:
+        return
+
+    yielded = 0
+
+    # Fast path: full 32-bit address, exact pointer value.
+    if address_mask == 0xFFFFFFFF:
+        for off in default_offsets:
+            needle = struct.pack("<I", (off + load_address) & 0xFFFFFFFF)
+            pos = data.find(needle)
+            while pos != -1:
+                if (pos & 3) == 0:
+                    yield pos
+                    yielded += 1
+                    if yielded >= _POLICY_HIT_LIMIT:
+                        return
+
+                # Original scanner only checks 4-byte aligned pointers.
+                step = 4 - (pos & 3)
+                pos = data.find(needle, pos + step)
+        return
+
+    # Masked address: one aligned scan.
+    default_set = {off for off in default_offsets if off <= address_mask}
+    if not default_set:
+        return
+
+    aligned_len = len(data) & ~3
+    if aligned_len <= 0:
+        return
+
+    mv = memoryview(data)[:aligned_len]
+    try:
+        iterator = struct.iter_unpack("<I", mv)
+    except Exception:
+        iterator = struct.iter_unpack("<I", data[:aligned_len])
+
+    for idx, (value,) in enumerate(iterator):
+        if ((value - load_address) & address_mask) in default_set:
+            yield idx << 2
+            yielded += 1
+            if yielded >= _POLICY_HIT_LIMIT:
+                return
+
+
+def _decode_policy_name(data, offset):
+    end_limit = min(offset + _POLICY_NAME_LIMIT, len(data))
+    end = data.find(b"\0", offset, end_limit)
+    if end == -1:
+        end = end_limit
+    return data[offset:end].decode("utf-8", "replace")
+
+
+def _parse_policy_table(data, start_pos, load_address, address_mask):
+    policies = []
+    pos = start_pos
+    data_len = len(data)
+
+    while pos + _POLICY_STRUCT_SIZE <= data_len and len(policies) < 1024:
+        try:
+            (
+                swid,
+                p1,
+                p2,
+                p3,
+                p4,
+                pol1,
+                pol2,
+                pol3,
+                pol4,
+                hbind,
+            ) = struct.unpack_from(_POLICY_STRUCT_FORMAT, data, pos)
+        except struct.error:
+            break
+
+        if p1 == 0:
+            break
+
+        name_offset = (p1 - load_address) & address_mask
+        if name_offset >= data_len:
+            break
+
+        name = _decode_policy_name(data, name_offset)
+        if not name or name == "NULL":
+            break
+
+        policies.append(
+            {
+                "name": name,
+                "nosbc_lock": pol1,
+                "nosbc_unlock": pol2,
+                "sbc_lock": pol3,
+                "sbc_unlock": pol4,
+            }
+        )
+
+        pos += _POLICY_STRUCT_SIZE
+
+    return policies
+
+
+def _analyze_partition_policies(data, load_address):
+    load_address = _to_u32(load_address)
+    address_mask = 0x000FFFFF if load_address == 0xFFFFFFFF else 0xFFFFFFFF
+
+    default_offsets = _find_default_policy_offsets(data)
+
+    report = {
+        "load_address": f"0x{load_address:08x}",
+        "address_mask": f"0x{address_mask:08x}",
+        "default_policy_candidates": len(default_offsets),
+        "policy_table_found": False,
+        "policies": [],
+    }
+
+    if not default_offsets:
+        return report
+
+    seen = set()
+    multiple = False
+
+    try:
+        for ptr_pos in _iter_policy_pointer_hits(
+            data,
+            default_offsets,
+            load_address,
+            address_mask,
+        ):
+            pos = ptr_pos - 4
+            if pos < 0 or pos in seen:
+                continue
+            seen.add(pos)
+
+            if pos + _POLICY_STRUCT_SIZE > len(data):
+                continue
+
+            try:
+                (
+                    swid,
+                    p1,
+                    p2,
+                    p3,
+                    p4,
+                    pol1,
+                    pol2,
+                    pol3,
+                    pol4,
+                    hbind,
+                ) = struct.unpack_from(_POLICY_STRUCT_FORMAT, data, pos)
+            except struct.error:
+                continue
+
+            if swid != 0 or p2 != 0 or p3 != 0:
+                continue
+
+            if report["policy_table_found"]:
+                multiple = True
+                continue
+
+            policies = _parse_policy_table(data, pos, load_address, address_mask)
+            if policies:
+                report["policy_table_found"] = True
+                report["policy_table_offset"] = f"0x{pos:x}"
+                report["policies"] = policies
+    except Exception:
+        if not report["policy_table_found"]:
+            report["warning"] = "Policy scan failed"
+
+    if multiple:
+        report["warning"] = "Multiple policy tables found"
+
+    return report
+
+
+def _analyze_policies_obj(data, partitions=None):
+    empty = {
+        "partition": None,
+        "policy_table_found": False,
+        "policies": [],
+        "default_policy_candidates": 0,
+        "load_address": None,
+        "address_mask": None,
+        "partitions_scanned": [],
+    }
+
+    try:
+        data = _to_bytes(data)
+    except Exception:
+        empty["error"] = "Не удалось прочитать данные образа"
+        return empty
+
+    if len(data) < 8:
+        return empty
+
+    if partitions is None:
+        try:
+            from liblk.image import LkImage
+
+            image = LkImage(data)
+            partitions = getattr(image, "partitions", None) or {}
+        except Exception:
+            partitions = {}
+
+    scanned = []
+    skipped = []
+
+    if partitions:
+        for name in _ordered_policy_partitions(partitions):
+            part = partitions[name]
+
+            try:
+                part_data = _to_bytes(getattr(part, "data", b""))
+            except Exception:
+                skipped.append(name)
+                continue
+
+            if not part_data:
+                continue
+
+            if len(part_data) > _POLICY_SCAN_LIMIT:
+                skipped.append(name)
+                continue
+
+            load_address = getattr(part, "lk_address", None)
+            if load_address is None:
+                load_address = getattr(
+                    getattr(part, "header", None),
+                    "memory_address",
+                    0,
+                )
+
+            load_address = _to_u32(load_address)
+            scanned.append(name)
+
+            try:
+                report = _analyze_partition_policies(part_data, load_address)
+            except Exception:
+                continue
+
+            if report.get("policy_table_found"):
+                report["partition"] = name
+                report["partitions_scanned"] = scanned
+                if skipped:
+                    report["partitions_skipped"] = skipped
+                return report
+
+        empty["partitions_scanned"] = scanned
+        if skipped:
+            empty["partitions_skipped"] = skipped
+        return empty
+
+    # Fallback: treat the whole input as one raw LK partition.
+    if len(data) <= _POLICY_SCAN_LIMIT:
+        try:
+            report = _analyze_partition_policies(data, 0)
+            if report.get("policy_table_found"):
+                report["partition"] = "raw"
+                report["partitions_scanned"] = ["raw"]
+                return report
+        except Exception:
+            pass
+
+    return empty
+
+
+def analyze_policies(data) -> str:
+    try:
+        return json.dumps(_analyze_policies_obj(data))
+    except Exception as e:
+        return json.dumps(
+            {
+                "partition": None,
+                "policy_table_found": False,
+                "policies": [],
+                "error": str(e),
+            }
+        )
+
+
 def diagnose_file(data) -> str:
     """Pre-patch diagnostics: magic bytes, size, OEM key presence.
 
@@ -326,12 +690,11 @@ def diagnose_file(data) -> str:
     patch that would brick the device (wrong format, already-patched,
     foreign model). Returns a JSON summary.
     """
-    # data may arrive as bytes or a JsProxy/Uint8Array; normalize to bytes.
-    if not isinstance(data, bytes):
-        try:
-            data = data.to_bytes() if hasattr(data, "to_bytes") else bytes(data)
-        except Exception:
-            data = bytes(memoryview(data))
+    try:
+        data = _to_bytes(data)
+    except Exception:
+        data = b""
+
     result = {
         "size": len(data),
         "magic_ok": False,
@@ -339,17 +702,23 @@ def diagnose_file(data) -> str:
         "has_oem_key": False,
         "oem_key_offset": None,
         "lk_partitions": [],
+        "policies": None,
     }
-    # MTK LK image header: magic at offset 0 (0x58881688), ext at 48 (0x58891689)
+
     if len(data) >= 8:
         magic = int.from_bytes(data[0:4], "little")
         result["magic_ok"] = magic == 0x58881688
+
+    partitions = {}
     try:
         from liblk.image import LkImage
+
         image = LkImage(bytes(data))
-        result["lk_partitions"] = list(image.partitions.keys())
+        partitions = getattr(image, "partitions", None) or {}
+        result["lk_partitions"] = list(partitions.keys())
     except Exception:
         result["lk_partitions"] = []
+
     try:
         old_n = _load_xiaomi_pub().public_numbers().n
         old_bytes = old_n.to_bytes(256, "big")
@@ -359,43 +728,13 @@ def diagnose_file(data) -> str:
             result["oem_key_offset"] = pos
     except Exception:
         result["has_oem_key"] = False
+
+    try:
+        result["policies"] = _analyze_policies_obj(data, partitions)
+    except Exception:
+        result["policies"] = None
+
     return json.dumps(result)
-
-
-# ---------------------------------------------------------------------------
-# UX 1: Parse and validate the MediaTek TLV unlock token
-# ---------------------------------------------------------------------------
-def _token_payload(token_text: str) -> str:
-    if isinstance(token_text, bytes):
-        token_text = token_text.decode("utf-8", "ignore")
-
-    parts = []
-    for line in (token_text or "").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-
-        line = re.sub(r"^\(bootloader\)\s*", "", line, flags=re.I)
-        line = line.strip()
-
-        # Drop "OKAY" only as a standalone status line, not inside a token.
-        if re.fullmatch(r"OKAY", line, flags=re.I):
-            continue
-
-        line = re.sub(r"^token\s*:\s*", "", line, flags=re.I)
-        line = line.strip()
-
-        if line:
-            parts.append(line)
-
-    tok = "".join(parts)
-    tok = re.sub(r"\s+", "", tok)
-
-    if tok.lower().startswith("0x"):
-        tok = tok[2:]
-
-    return tok
-
 
 def _decode_token_bytes(tok: str) -> bytes:
     if not tok:
