@@ -1814,7 +1814,9 @@ async function showKeyFingerprint(){
 /* ================= WebUSB ADB: read-only getprop ================= */
 (() => {
   let adb=null, transport=null, connection=null, isConnecting=false;
-  let pktLogOn=false;
+  // Packet log ON by default so every connect attempt captures the ADB
+  // handshake — diagnostics first, toggle OFF to silence the noise.
+  let pktLogOn=true;
   const connectBtn=els.connectDeviceBtn, statusEl=els.deviceStatus, fpInput=els.fingerprint, infoEl=els.deviceInfo;
   const HOST = location.hostname || 'localhost';
 
