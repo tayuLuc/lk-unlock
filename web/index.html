@@ -1020,8 +1020,9 @@ async function showKeyFingerprint(){
 
 /* ================= WebUSB ADB: read-only getprop ================= */
 (() => {
-  let adb=null, transport=null;
+  let adb=null, transport=null, connection=null;
   const connectBtn=els.connectDeviceBtn, statusEl=els.deviceStatus, fpInput=els.fingerprint, infoEl=els.deviceInfo;
+  const HOST = location.hostname || 'localhost';
 
   function setStatus(msg,type='default'){
     const t=statusEl.querySelector('.status-text');
@@ -1060,18 +1061,24 @@ async function showKeyFingerprint(){
       const device=await manager.requestDevice();
       if(!device){ setStatus('Устройство не выбрано','error'); return; }
       setStatus('Подключение к '+device.name+'…','loading');
-      const connection=await device.connect();
-      const credStore=new CredStore('lk-unlock@'+location.hostname);
+      connection=await device.connect();
+      const credentialStore=new CredStore('lk-unlock@'+HOST);
       setStatus('Авторизация…','loading');
-      // Correct signature: {serial, connection, credentialStore}
-      transport=await AdbDaemonTransport.authenticate({serial:device.serial, connection, credentialStore});
+      try{
+        transport=await AdbDaemonTransport.authenticate({serial:device.serial, connection, credentialStore});
+      }catch(err){
+        // Close the USB connection so the interface is released on auth failure.
+        try{ await connection.close(); }catch(_){}
+        connection=null;
+        throw err;
+      }
       adb=new Adb(transport);
       setStatus('✓ '+device.name,'connected');
       await readDeviceProperties();
     }catch(e){
       console.error('WebUSB connect error:',e);
+      await disconnectDevice(true);
       setStatus('Ошибка: '+(e.message||e),'error');
-      disconnectDevice();
     }
   }
   async function readDeviceProperties(){
@@ -1079,9 +1086,9 @@ async function showKeyFingerprint(){
     try{
       setStatus('Чтение данных…','loading');
       const [fp,osv,locked]=await Promise.all([
-        adb.getProp('ro.build.fingerprint').catch(()=>''),
-        adb.getProp('ro.mi.os.version.incremental').catch(()=>''),
-        adb.getProp('ro.boot.flash.locked').catch(()=>'1')
+        adb.getProp('ro.build.fingerprint').catch(e=>{console.warn('getprop fingerprint:',e);return '';}),
+        adb.getProp('ro.mi.os.version.incremental').catch(e=>{console.warn('getprop os:',e);return '';}),
+        adb.getProp('ro.boot.flash.locked').catch(e=>{console.warn('getprop locked:',e);return '1';})
       ]);
       if(fp){
         fpInput.value=fp;
@@ -1101,13 +1108,20 @@ async function showKeyFingerprint(){
       setStatus('Ошибка чтения: '+(e.message||e),'error');
     }
   }
-  function disconnectDevice(){
-    try{ transport&&transport.close(); }catch(e){}
-    transport=null; adb=null;
-    setStatus('Отключено','default');
+  // keepClean=false lets the caller show an error status afterwards.
+  async function disconnectDevice(keepClean){
+    try{ transport&&await transport.close(); }catch(e){}
+    try{ connection&&await connection.close(); }catch(e){}
+    transport=null; connection=null; adb=null;
+    if(!keepClean) setStatus('Отключено','default');
   }
+  // Handle physical USB unplug.
+  if(navigator.usb) navigator.usb.addEventListener('disconnect',()=>{
+    if(transport||connection) disconnectDevice();
+    setStatus('Устройство отключено','error');
+  });
   connectBtn.addEventListener('click',async()=>{
-    if(transport) disconnectDevice(); else await connectToDevice();
+    if(transport) await disconnectDevice(); else await connectToDevice();
   });
   setStatus('Не подключено');
 })();
