@@ -1813,64 +1813,223 @@ async function showKeyFingerprint(){
 
 /* ================= WebUSB ADB: read-only getprop ================= */
 (() => {
-  let adb=null, transport=null, connection=null, isConnecting=false;
+  let adb=null, usbDevice=null, isConnecting=false;
   // Packet log ON by default so every connect attempt captures the ADB
   // handshake — diagnostics first, toggle OFF to silence the noise.
   let pktLogOn=true;
   const connectBtn=els.connectDeviceBtn, statusEl=els.deviceStatus, fpInput=els.fingerprint, infoEl=els.deviceInfo;
-  const HOST = location.hostname || 'localhost';
 
-  // localStorage-backed ADB key store — same approach as app.webadb.com
-  // (their key lives in localStorage["private-key"]). AdbWebCredentialStore
-  // (IndexedDB "Tango") failed to produce a working auth on some profiles,
-  // so we mirror the reference implementation that provably works.
-  class LocalAdbKeyStore{
-    constructor(name){ this.lsKey='adb-key:'+name; }
-    async *iterateKeys(){
-      const raw=localStorage.getItem(this.lsKey);
-      if(!raw) return;
-      const bin=atob(raw), buf=new Uint8Array(bin.length);
-      for(let i=0;i<bin.length;i++) buf[i]=bin.charCodeAt(i);
-      yield { buffer:buf, name:this.lsKey };
-    }
+  // ── Custom ADB-over-WebUSB implementation ─────────────────────────────
+  // Ported from app.webadb.com's proven-working stack (custom connection +
+  // custom authenticate + localStorage key store). The @yume-chan library
+  // path failed to authenticate on the user's POCO/HyperOS: WebCrypto
+  // double-hashes the token (SHA-1 of SHA-1) and sends a PKCS#8/SPKI public
+  // key instead of the mincrypt RSAPublicKey struct adbd requires, so the
+  // phone silently ignores the handshake and never shows the RSA dialog.
+  const ADB={
+    CMD_CNXN:0x4e58434e, CMD_AUTH:0x48545541, CMD_OPEN:0x4e45504f,
+    CMD_OKAY:0x59414b4f, CMD_CLSE:0x45534c43, CMD_WRTE:0x45545257,
+    AUTH_TOKEN:0, AUTH_SIGNATURE:1, AUTH_RSAPUBLICKEY:2,
+    VERSION:0x01000001, MAX_PAYLOAD:256*1024
+  };
+  // BigInt modular math for raw RSA (WebCrypto's RSASSA hashes the input,
+  // which would double-hash the ADB token).
+  function modPow(base,exp,mod){ let res=1n; base%=mod; while(exp>0n){ if(exp%2n===1n) res=(res*base)%mod; exp/=2n; base=(base*base)%mod; } return res; }
+  function b64UrlToBytes(b64){ const s=b64.replace(/-/g,'+').replace(/_/g,'/'); const bin=atob(s); const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i); return bytes; }
+  function bytesToBigInt(bytes){ let r=0n; for(let i=0;i<bytes.length;i++) r=(r<<8n)|BigInt(bytes[i]); return r; }
+  function bigIntToBytes(n,len){ const b=new Uint8Array(len); for(let i=0;i<len;i++){ b[len-1-i]=Number(n&0xFFn); n>>=8n; } return b; }
+  async function signToken(privateKey,token){
+    const jwk=await crypto.subtle.exportKey('jwk',privateKey);
+    const d=bytesToBigInt(b64UrlToBytes(jwk.d)), n=bytesToBigInt(b64UrlToBytes(jwk.n));
+    // PKCS#1 v1.5 block (256 bytes): 00 01 FF..FF 00 || SHA-1 DigestInfo || token
+    const block=new Uint8Array(256);
+    block[0]=0x00; block[1]=0x01;
+    for(let i=2;i<220;i++) block[i]=0xFF;
+    block[220]=0x00;
+    block.set([0x30,0x21,0x30,0x09,0x06,0x05,0x2b,0x0e,0x03,0x02,0x1a,0x05,0x00,0x04,0x14],221);
+    block.set(token,236);
+    return bigIntToBytes(modPow(bytesToBigInt(block),d,n),256);
+  }
+  // Android adbd expects AUTH_PUBLICKEY payload = base64(mincrypt
+  // RSAPublicKey struct) + " " + comment + NUL. Struct (524 bytes):
+  // words(4) n0inv(4) n(256) rr=R^2 mod n(256) e(4) — little-endian words.
+  async function getAdbPublicKeyPayload(cryptoKey){
+    const jwk=await crypto.subtle.exportKey('jwk',cryptoKey);
+    const n=bytesToBigInt(b64UrlToBytes(jwk.n)), e=bytesToBigInt(b64UrlToBytes(jwk.e));
+    const WORDS=64, r32=1n<<32n, R=1n<<2048n, rr=(R*R)%n, rem=n%r32;
+    function modInverse(a,m){ let [m0,x0,x1]=[m,0n,1n]; while(a>1n){ let q=a/m,t=m; m=a%m; a=t; t=x0; x0=x1-q*x0; x1=t; } if(x1<0n) x1+=m0; return x1; }
+    let n0inv=(-modInverse(rem,r32))%r32; if(n0inv<0n) n0inv+=r32;
+    const buf=new Uint8Array(524), view=new DataView(buf.buffer);
+    view.setUint32(0,WORDS,true); view.setUint32(4,Number(n0inv),true);
+    let off=8;
+    for(let i=0;i<WORDS;i++){ view.setUint32(off,Number((n>>BigInt(i*32))&0xffffffffn),true); off+=4; }
+    for(let i=0;i<WORDS;i++){ view.setUint32(off,Number((rr>>BigInt(i*32))&0xffffffffn),true); off+=4; }
+    view.setUint32(off,Number(e),true);
+    let bin=''; for(let i=0;i<buf.length;i++) bin+=String.fromCharCode(buf[i]);
+    return new TextEncoder().encode(btoa(bin)+' lk-unlock@'+location.hostname+'\0');
+  }
+  // localStorage ADB key store (same as app.webadb.com).
+  const KeyStore={
+    async iterateKeys(){
+      const json=localStorage.getItem('adb_keys'); if(!json) return [];
+      const out=[];
+      for(const k of JSON.parse(json)){
+        const bin=Uint8Array.from(atob(k.privateKey),c=>c.charCodeAt(0));
+        const priv=await crypto.subtle.importKey('pkcs8',bin,{name:'RSASSA-PKCS1-v1_5',hash:'SHA-1'},true,['sign']);
+        out.push({privateKey:priv, publicKeyPayload:new TextEncoder().encode(k.publicKey)});
+      }
+      return out;
+    },
     async generateKey(){
-      const {privateKey}=await crypto.subtle.generateKey(
-        {name:'RSASSA-PKCS1-v1_5',modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:'SHA-1'},
-        true,['sign','verify']);
-      const buf=new Uint8Array(await crypto.subtle.exportKey('pkcs8',privateKey));
-      let bin=''; for(let i=0;i<buf.length;i++) bin+=String.fromCharCode(buf[i]);
-      localStorage.setItem(this.lsKey,btoa(bin));
-      return { buffer:buf, name:this.lsKey };
+      const pair=await crypto.subtle.generateKey({name:'RSASSA-PKCS1-v1_5',modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:'SHA-1'},true,['sign']);
+      const pkcs8=new Uint8Array(await crypto.subtle.exportKey('pkcs8',pair.privateKey));
+      let bin=''; for(let i=0;i<pkcs8.length;i++) bin+=String.fromCharCode(pkcs8[i]);
+      const pubPayload=await getAdbPublicKeyPayload(pair.publicKey);
+      const keys=JSON.parse(localStorage.getItem('adb_keys')||'[]');
+      keys.push({privateKey:btoa(bin), publicKey:new TextDecoder().decode(pubPayload)});
+      localStorage.setItem('adb_keys',JSON.stringify(keys));
+      return {privateKey:pair.privateKey, publicKeyPayload:pubPayload};
+    }
+  };
+  // Low-level packet I/O with optional packet log.
+  const PKT_CMDS={0x4e58434e:'CNXN',0x48545541:'AUTH',0x4e45504f:'OPEN',0x59414b4f:'OKAY',0x45534c43:'CLSE',0x45545257:'WRTE',0x434e5953:'SYNC'};
+  const AUTH_TYPES={0:'TOKEN',1:'SIGNATURE',2:'PUBKEY'};
+  function pktCmd(c){ return PKT_CMDS[c]||'0x'+c.toString(16).toUpperCase().padStart(8,'0'); }
+  function calculateChecksum(p){ let s=0; for(let i=0;i<p.length;i++) s=(s+p[i])&0xffffffff; return s>>>0; }
+  function logPkt(dir,cmd,arg0,arg1,len){ if(pktLogOn) log(`<span class="pkt-${dir}">[${dir}]</span> ${pktCmd(cmd)} a0=${cmd===ADB.CMD_AUTH?(arg0+'('+(AUTH_TYPES[arg0]||'?')+')'):arg0} a1=${arg1} len=${len}`); }
+  async function sendPacket(device,outEp,cmd,arg0,arg1,payload=new Uint8Array()){
+    const h=new ArrayBuffer(24), v=new DataView(h);
+    v.setUint32(0,cmd,true); v.setUint32(4,arg0,true); v.setUint32(8,arg1,true);
+    v.setUint32(12,payload.length,true); v.setUint32(16,calculateChecksum(payload),true); v.setUint32(20,cmd^0xffffffff,true);
+    const packet=new Uint8Array(24+payload.length); packet.set(new Uint8Array(h),0); packet.set(payload,24);
+    logPkt('OUT',cmd,arg0,arg1,payload.length);
+    await device.transferOut(outEp,packet);
+  }
+  async function readPacket(device,inEp){
+    let header=new Uint8Array();
+    while(header.length<24){
+      const res=await device.transferIn(inEp,24-header.length);
+      if(res.status!=='ok') throw new Error('USB transfer error');
+      const chunk=new Uint8Array(res.data.buffer,res.data.byteOffset,res.data.byteLength);
+      const merged=new Uint8Array(header.length+chunk.length); merged.set(header); merged.set(chunk,header.length); header=merged;
+    }
+    const v=new DataView(header.buffer);
+    const cmd=v.getUint32(0,true), arg0=v.getUint32(4,true), arg1=v.getUint32(8,true), len=v.getUint32(12,true);
+    let payload=new Uint8Array();
+    if(len>0){
+      while(payload.length<len){
+        const res=await device.transferIn(inEp,len-payload.length);
+        if(res.status!=='ok') throw new Error('USB transfer error');
+        const chunk=new Uint8Array(res.data.buffer,res.data.byteOffset,res.data.byteLength);
+        const merged=new Uint8Array(payload.length+chunk.length); merged.set(payload); merged.set(chunk,payload.length); payload=merged;
+      }
+    }
+    logPkt('IN',cmd,arg0,arg1,len);
+    return {cmd,arg0,arg1,payload};
+  }
+  // AUTH handshake: token → signatures with known keys → public key.
+  async function authenticate(device,inEp,outEp){
+    let packet=await readPacket(device,inEp);
+    if(packet.cmd===ADB.CMD_CNXN) return packet.payload; // already authorized
+    if(packet.cmd!==ADB.CMD_AUTH||packet.arg0!==ADB.AUTH_TOKEN) throw new Error('Expected AUTH TOKEN');
+    let token=packet.payload;
+    const keys=await KeyStore.iterateKeys();
+    for(const key of keys){
+      const sig=await signToken(key.privateKey,token);
+      await sendPacket(device,outEp,ADB.CMD_AUTH,ADB.AUTH_SIGNATURE,0,sig);
+      packet=await readPacket(device,inEp);
+      if(packet.cmd===ADB.CMD_CNXN) return packet.payload;
+      if(packet.cmd===ADB.CMD_AUTH&&packet.arg0===ADB.AUTH_TOKEN){ token=packet.payload; continue; }
+      throw new Error('Unexpected AUTH response');
+    }
+    const fresh=await KeyStore.generateKey();
+    await sendPacket(device,outEp,ADB.CMD_AUTH,ADB.AUTH_RSAPUBLICKEY,0,fresh.publicKeyPayload);
+    packet=await readPacket(device,inEp);
+    if(packet.cmd===ADB.CMD_CNXN) return packet.payload;
+    throw new Error('Auth failed or rejected');
+  }
+  // Socket multiplexing (OPEN/OKAY/WRTE/CLSE) — minimal for getprop.
+  class AdbSocket{
+    constructor(daemon,localId){ this.daemon=daemon; this.localId=localId; this.remoteId=0; this.chunks=[]; this.closed=false;
+      this.connectedPromise=new Promise((res,rej)=>{this._resolveConnected=res; this._rejectConnected=rej;}); }
+    _onOkay(remoteId){ this.remoteId=remoteId; this._resolveConnected(); }
+    _onData(data){ this.chunks.push(data); }
+    _onClose(){ this.closed=true; }
+    async read(){
+      if(this.chunks.length) return this.chunks.shift();
+      if(this.closed) return null;
+      // Wait for the next write/close by polling the internal queue.
+      return new Promise((resolve,reject)=>{
+        const timer=setInterval(()=>{
+          if(this.chunks.length){ clearInterval(timer); resolve(this.chunks.shift()); }
+          else if(this.closed){ clearInterval(timer); resolve(null); }
+        },20);
+      });
+    }
+    async write(data){ if(typeof data==='string') data=new TextEncoder().encode(data); await sendPacket(this.daemon.device,this.daemon.outEp,ADB.CMD_WRTE,this.localId,this.remoteId,data); }
+    async close(){ if(!this.closed){ await sendPacket(this.daemon.device,this.daemon.outEp,ADB.CMD_CLSE,this.localId,this.remoteId); this.closed=true; this.daemon.sockets.delete(this.localId); } }
+  }
+  class AdbDaemon{
+    constructor(device,inEp,outEp){ this.device=device; this.inEp=inEp; this.outEp=outEp; this.sockets=new Map(); this.nextLocalId=1; this._readLoop(); }
+    async _readLoop(){
+      try{
+        for(;;){
+          const pkt=await readPacket(this.device,this.inEp);
+          if(pkt.cmd===ADB.CMD_OKAY){ const s=this.sockets.get(pkt.arg0); if(s) s._onOkay(pkt.arg1); }
+          else if(pkt.cmd===ADB.CMD_WRTE){ const s=this.sockets.get(pkt.arg0); if(s){ s._onData(pkt.payload); sendPacket(this.device,this.outEp,ADB.CMD_OKAY,s.remoteId,pkt.arg0).catch(()=>{}); } }
+          else if(pkt.cmd===ADB.CMD_CLSE){ const s=this.sockets.get(pkt.arg0); if(s){ s._onClose(); sendPacket(this.device,this.outEp,ADB.CMD_CLSE,s.remoteId,pkt.arg0).catch(()=>{}); this.sockets.delete(pkt.arg0); } }
+        }
+      }catch(e){ if(!this.closed) console.error('Read loop error:',e); }
+    }
+    async close(){ this.closed=true; try{ await this.device.close(); }catch(_){} }
+    async open(destination){
+      const localId=this.nextLocalId++;
+      const socket=new AdbSocket(this,localId);
+      this.sockets.set(localId,socket);
+      await sendPacket(this.device,this.outEp,ADB.CMD_OPEN,localId,0,new TextEncoder().encode(destination+'\0'));
+      await socket.connectedPromise;
+      return socket;
     }
   }
-
-  // ADB packet log (same idea as app.webadb.com's Packet Log): wrap the
-  // connection in logging streams so every packet is visible in the log.
-  // Decodes the 4-byte command into a readable name plus arg0/arg1/len.
-  const PKT_CMDS={0x4e58434e:'CNXN',0x48545541:'AUTH',0x4e45504f:'OPEN',0x59414b4f:'OKAY',0x45534c43:'CLSE',0x45545257:'WRTE',0x434e5953:'SYNC'};
-  const AUTH_TYPES={1:'TOKEN',2:'SIGNATURE',3:'PUBKEY'};
-  function pktCmd(c){ return PKT_CMDS[c]||'0x'+c.toString(16).toUpperCase().padStart(8,'0'); }
-  function pktDesc(p){
-    const len=p.payload?p.payload.byteLength:0;
-    let hex='';
-    if(p.payload){ const b=new Uint8Array(p.payload.buffer||p.payload,p.payload.byteOffset||0,Math.min(len,12)); for(let i=0;i<b.length;i++) hex+=b[i].toString(16).padStart(2,'0')+' '; if(len>12) hex+='…'; }
-    let a0=p.arg0;
-    if(p.command===0x48545541) a0+='('+(AUTH_TYPES[p.arg0]||'?')+')'; // AUTH
-    return `${pktCmd(p.command)} a0=${a0} a1=${p.arg1} len=${len} ${hex}`;
+  class AdbConnection{
+    constructor(daemon){ this.daemon=daemon; this.serial=usbDevice.serialNumber||''; }
+    createSocket(destination){ return this.daemon.open(destination); }
+    async getProp(propName){
+      const socket=await this.createSocket('shell:getprop '+propName);
+      let out=''; let chunk;
+      while((chunk=await socket.read())!==null) out+=new TextDecoder().decode(chunk);
+      await socket.close();
+      return out.trim();
+    }
+    async close(){ await this.daemon.close(); }
   }
-  function pktLog(dir,p){
-    try{ log(`<span class="pkt-${dir}">[${dir}]</span> ${pktDesc(p)}`); }
-    catch(e){ log(`[${dir}] <packet>`); }
-  }
-  function wrapConnForLog(conn){
-    const logIn=new TransformStream({ transform:(p,c)=>{pktLog('IN',p); c.enqueue(p);} });
-    const inner=conn.writable.getWriter();
-    const logOut=new WritableStream({
-      write:async p=>{pktLog('OUT',p); await inner.write(p);},
-      close:async()=>{inner.releaseLock(); try{await conn.writable.close();}catch(_){}},
-      abort:async e=>{inner.releaseLock(); try{await conn.writable.abort(e);}catch(_){}},
-    });
-    return { readable: conn.readable.pipeThrough(logIn), writable: logOut };
+  // Main entry: pick device, open, claim ADB interface, connect.
+  async function connectAdb(){
+    const device=await navigator.usb.requestDevice({filters:[{classCode:255,subclassCode:66,protocolCode:1}]});
+    if(!device) return null;
+    await device.open();
+    let adbInterface=null;
+    for(const config of device.configurations||[]){
+      await device.selectConfiguration(config.configurationValue);
+      adbInterface=config.interfaces.find(i=>
+        i.alternate.interfaceClass===255 && i.alternate.interfaceSubclass===66 && i.alternate.interfaceProtocol===1);
+      if(adbInterface) break;
+    }
+    if(!adbInterface) throw new Error('ADB interface not found');
+    const interfaceNumber=adbInterface.interfaceNumber, alternate=adbInterface.alternate;
+    try{ await device.claimInterface(interfaceNumber); }
+    catch(claimErr){
+      const msg=(claimErr.message||'').toLowerCase();
+      if(msg.includes('claim')||msg.includes('in use')) throw new Error('USB_BLOCKED');
+      throw claimErr;
+    }
+    if(alternate.alternateSetting!==0) await device.selectAlternateInterface(interfaceNumber,alternate.alternateSetting);
+    const inEp=alternate.endpoints.find(e=>e.direction==='in').endpointNumber;
+    const outEp=alternate.endpoints.find(e=>e.direction==='out').endpointNumber;
+    await sendPacket(device,outEp,ADB.CMD_CNXN,ADB.VERSION,ADB.MAX_PAYLOAD,
+      new TextEncoder().encode('host::features=shell_v2,cmd,stat_v2,ls_v2,fixed_push_mkdir,apex,abb,remount_shell,track_app,sendrecv_v2\0'));
+    await authenticate(device,inEp,outEp);
+    return {connection:new AdbConnection(new AdbDaemon(device,inEp,outEp)), name:device.productName||device.serialNumber||'Android', raw:device};
   }
   $('#btnPkts').onclick=()=>{
     pktLogOn=!pktLogOn;
@@ -1890,20 +2049,6 @@ async function showKeyFingerprint(){
       return {ok:false, reason:t('webusb.requiresHttps')};
     return {ok:true};
   }
-  async function loadAdbLibs(){
-    if(window.AdbLibs) return window.AdbLibs;
-    setStatus(t('webusb.loadingLibs'),'loading');
-    try{
-      const [adbM,webusbM,credM]=await Promise.all([
-        import('https://esm.sh/@yume-chan/adb@2.6.2'),
-        import('https://esm.sh/@yume-chan/adb-daemon-webusb@2.3.2'),
-        import('https://esm.sh/@yume-chan/adb-credential-web@2.1.0')
-      ]);
-      window.AdbLibs={Adb:adbM.Adb, AdbDaemonTransport:adbM.AdbDaemonTransport,
-        Manager:webusbM.AdbDaemonWebUsbDeviceManager, CredStore:credM.default};
-      return window.AdbLibs;
-    }catch(e){ setStatus(t('webusb.libsLoadFailed'),'error'); throw e; }
-  }
   async function connectToDevice(){
     // Guard against double-click: a second attempt would race the first
     // one and fail with 'claimInterface: Unable to claim interface'.
@@ -1913,53 +2058,15 @@ async function showKeyFingerprint(){
     const c=checkWebUSB();
     if(!c.ok){ setStatus(c.reason,'error'); return; }
     try{
-      const {Adb,AdbDaemonTransport,Manager,CredStore}=await loadAdbLibs();
-      const manager=Manager.BROWSER;
-      if(!manager){ setStatus(t('webusb.unavailable'),'error'); return; }
       setStatus(t('webusb.chooseDevice'),'loading');
-      // Always use the native chooser so the user picks the exact device
-      // (no auto-attach / getDevices branching).
-      const device = await manager.requestDevice();
-      if(!device){ setStatus(t('webusb.deviceNotSelected'),'error'); return; }
-      setStatus(t('webusb.connectingTo',{name:device.name}),'loading');
-      try{
-        connection=await device.connect();
-      }catch(claimErr){
-        // The USB interface is held by another program (local adb server,
-        // Android Studio, scrcpy, another tab). WebUSB can't free it from
-        // the sandbox, so tell the user exactly what to do instead.
-        const msg=(claimErr.message||'').toLowerCase();
-        if(msg.includes('claim interface')||msg.includes('claiminterface')||msg.includes('in use'))
-          throw new Error('USB_BLOCKED');
-        throw claimErr;
-      }
-      const credentialStore=new LocalAdbKeyStore('lk-unlock');
-      // Wrap the connection in logging streams so the auth handshake is
-      // visible in the log (matches app.webadb.com's packet log approach).
-      const authConn = pktLogOn ? wrapConnForLog(connection) : connection;
+      const res=await connectAdb();
+      if(!res){ setStatus(t('webusb.deviceNotSelected'),'error'); return; }
+      usbDevice=res.raw;
+      adb=res.connection;
       setStatus(t('webusb.confirmAccess'),'loading');
-      try{
-        // Race the ADB auth against a 20s timeout: if the user misses the
-        // RSA prompt on the phone, fail instead of hanging forever.
-        const authPromise=AdbDaemonTransport.authenticate({serial:device.serial, connection:authConn, credentialStore});
-        authPromise.catch(()=>{}); // late rejection after timeout must not become unhandled
-        let timer;
-        const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('AUTH_TIMEOUT')),20000)});
-        try{ transport=await Promise.race([authPromise,timeout]); }
-        finally{ clearTimeout(timer); }
-      }catch(err){
-        // Close the USB connection so the interface is released on auth
-        // failure (otherwise it stays busy and reconnect errors out).
-        // Note: AdbDaemonWebUsbConnection has no close() — closing the
-        // writable triggers the duplex close handler (device.raw.close()).
-        await safeCloseAdbConnection(connection);
-        connection=null;
-        transport=null;
-        if(err.message==='AUTH_TIMEOUT') throw new Error(t('webusb.timeout'));
-        throw err;
-      }
-      adb=new Adb(transport);
-      setStatus('✓ '+device.name,'connected');
+      // The AUTH handshake runs inside connectAdb; nothing to time out
+      // separately — authenticate() reads packets until the phone replies.
+      setStatus('✓ '+res.name,'connected');
       await readDeviceProperties();
     }catch(e){
       console.error('WebUSB connect error:',e);
@@ -2004,28 +2111,19 @@ async function showKeyFingerprint(){
     }
   }
   // keepClean=false lets the caller show an error status afterwards.
-  async function safeCloseAdbConnection(connection){
-    if(!connection) return;
-    // Physical release is device.raw.close() — it frees the USB interface
-    // and aborts any pending transferIn. writable.close() only triggers the
-    // same via the duplex close handler and FAILS if the stream is locked
-    // (the packet-log wrapper holds a writer on it), so raw-close first.
-    try{ await connection.device?.raw?.close(); }catch(_){}
-    try{ await connection.writable.close(); }catch(e){ console.warn('ADB writable.close failed',e); }
-  }
   async function disconnectDevice(keepClean){
-    try{ transport&&await transport.close(); }catch(e){}
-    await safeCloseAdbConnection(connection);
-    transport=null; connection=null; adb=null;
+    try{ adb&&await adb.close(); }catch(e){}
+    try{ usbDevice&&await usbDevice.close(); }catch(_){}
+    adb=null; usbDevice=null;
     if(!keepClean) setStatus(t('webusb.disconnected'),'default');
   }
-  // Handle physical USB unplug.
+  // Physical USB unplug.
   if(navigator.usb) navigator.usb.addEventListener('disconnect',async()=>{
-    if(transport||connection) await disconnectDevice();
+    if(adb||usbDevice) await disconnectDevice();
     setStatus(t('webusb.deviceDisconnected'),'error');
   });
   connectBtn.addEventListener('click',async()=>{
-    if(transport) await disconnectDevice(); else await connectToDevice();
+    if(adb) await disconnectDevice(); else await connectToDevice();
   });
   setStatus(t('webusb.notConnected'));
 })();
