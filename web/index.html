@@ -1980,8 +1980,12 @@ async function showKeyFingerprint(){
   // keepClean=false lets the caller show an error status afterwards.
   async function safeCloseAdbConnection(connection){
     if(!connection) return;
-    try{ await connection.writable.close(); }catch(e){ console.warn('ADB writable.close failed',e); }
+    // Physical release is device.raw.close() — it frees the USB interface
+    // and aborts any pending transferIn. writable.close() only triggers the
+    // same via the duplex close handler and FAILS if the stream is locked
+    // (the packet-log wrapper holds a writer on it), so raw-close first.
     try{ await connection.device?.raw?.close(); }catch(_){}
+    try{ await connection.writable.close(); }catch(e){ console.warn('ADB writable.close failed',e); }
   }
   async function disconnectDevice(keepClean){
     try{ transport&&await transport.close(); }catch(e){}
