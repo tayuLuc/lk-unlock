@@ -1122,3 +1122,397 @@ def sign_token(text: str) -> str:
             "sha256": hashlib.sha256(sig).hexdigest(),
         }
     )
+
+# === Новые функции патчинга (не трогать старый patch_file / RPC-контракт) ===
+
+
+# ── helpers ──
+
+def _hex_to_bytes(h: str) -> bytes:
+    s = h.replace(" ", "").replace("\n", "").replace("\r", "").replace("\t", "")
+    if s.lower().startswith("0x"):
+        s = s[2:]
+    if len(s) % 2:
+        raise ValueError("нечётная длина hex")
+    return bytes.fromhex(s)
+
+def _find_all(data: bytes, needle: bytes) -> list:
+    res, start = [], 0
+    while True:
+        i = data.find(needle, start)
+        if i < 0:
+            break
+        res.append(i)
+        start = i + 1
+    return res
+
+def _get_xiaomi_modulus() -> bytes:
+    return _load_xiaomi_pub().public_numbers().n.to_bytes(256, "big")
+
+def _rsa2048_modulus_from_pem(pem: str) -> bytes:
+    from pyasn1.codec.der import decoder as der_dec
+
+    m = re.search(r"-----BEGIN ([A-Z0-9 ]+)-----([\s\S]*?)-----END \1-----", pem)
+    if not m:
+        raise ValueError("no PEM block found")
+    der = base64.b64decode("".join(m.group(2).split()))
+
+    try:
+        rk, _ = der_dec.decode(der)
+    except Exception:
+        raise ValueError("expected PKCS#1 'RSA PRIVATE KEY'")
+    # PKCS#1 RSAPrivateKey layout: version, modulus, publicExponent, ...
+    n = int(rk[1])
+    if n.bit_length() != 2048:
+        raise ValueError(f"нужен RSA-2048, получен {n.bit_length()} бит")
+    return n.to_bytes(256, "big")
+
+_SPOOF_ANCHOR = bytes.fromhex("7b441b68db682360")
+_SPOOF_PATCH  = bytes.fromhex("0423")
+_SPOOF_DELTA  = 4
+
+# ── diagnose ──
+
+def diagnose_image(data: bytes) -> dict:
+    r = {"ok": True, "errors": [], "warnings": [],
+         "rsa_key_found": False, "rsa_key_offset": None,
+         "cert2_present": False, "cert2_parseable": False, "cert2_enforced": False,
+         "lock_state_patch_found": False, "recommended_strategy": None}
+    buf = bytes(data)
+
+    try:
+        mod = _get_xiaomi_modulus()
+        offs = _find_all(buf, mod)
+        if offs:
+            r["rsa_key_found"] = True
+            r["rsa_key_offset"] = offs[0]
+            if len(offs) > 1:
+                r["warnings"].append(f"RSA модуль найден в {len(offs)} местах")
+    except Exception as e:
+        r["warnings"].append(f"RSA check: {e}")
+
+    try:
+        from liblk.image import LkImage
+        img = LkImage(buf)
+        for part in img.partitions.values():
+            if part.certs and len(part.certs) > 1:
+                r["cert2_present"] = True
+                try:
+                    if part.matches_cert2() is not None:
+                        r["cert2_parseable"] = True
+                except Exception:
+                    pass
+        r["cert2_enforced"] = r["cert2_present"] and r["cert2_parseable"]
+    except Exception as e:
+        r["warnings"].append(f"Разбор образа: {e}")
+
+    aoffs = _find_all(buf, _SPOOF_ANCHOR)
+    r["lock_state_patch_found"] = len(aoffs) > 0
+    if len(aoffs) > 1:
+        r["warnings"].append(f"Якорь lock state в {len(aoffs)} местах")
+
+    if r["rsa_key_found"] and r["cert2_enforced"]:
+        r["recommended_strategy"] = "replace_and_resign"
+    elif r["rsa_key_found"]:
+        r["recommended_strategy"] = "replace_rsa_key"
+    elif r["cert2_enforced"]:
+        r["recommended_strategy"] = "resign_cert2"
+    else:
+        r["recommended_strategy"] = "none"
+        if not r["rsa_key_found"] and not r["cert2_present"]:
+            r["warnings"].append("Ни RSA ключ, ни cert2 не найдены")
+    return r
+
+# ── validate ──
+
+def validate_patch_request(data: bytes, opts: dict) -> dict:
+    errors, warnings, plan = [], [], []
+    buf = bytes(data)
+    strategy = opts.get("strategy", "none")
+    json_patches = opts.get("json_patches") or []
+    spoof = opts.get("spoof_lock_state", False)
+    spoof_req = opts.get("spoof_lock_required", False)
+    allow_ovl = opts.get("unsafe_allow_overlaps", False)
+
+    if strategy not in ("none", "replace_rsa_key", "resign_cert2", "replace_and_resign"):
+        return {"ok": False, "errors": [f"Неизвестная стратегия: {strategy}"], "warnings": [], "plan": []}
+
+    need_rsa = strategy in ("replace_rsa_key", "replace_and_resign")
+    need_resign = strategy in ("resign_cert2", "replace_and_resign")
+    occupied = []
+
+    if need_rsa:
+        pem = opts.get("rsa_private_key_pem")
+        if not pem:
+            errors.append("rsa_private_key_pem обязателен")
+        else:
+            try:
+                _rsa2048_modulus_from_pem(pem)
+            except Exception as e:
+                errors.append(f"RSA ключ: {e}")
+        try:
+            mod = _get_xiaomi_modulus()
+            offs = _find_all(buf, mod)
+            if not offs:
+                errors.append("RSA модуль Xiaomi не найден в образе")
+            else:
+                if len(offs) > 1:
+                    warnings.append(f"RSA модуль в {len(offs)} местах, будет использован первый")
+                occupied.append((offs[0], offs[0] + 256))
+                plan.append({"type": "replace_rsa_key", "offset": offs[0], "length": 256, "status": "ready"})
+        except Exception as e:
+            errors.append(f"RSA check: {e}")
+
+    if need_resign:
+        try:
+            from liblk.image import LkImage
+            img = LkImage(buf)
+            if not any(p.certs and len(p.certs) > 1 for p in img.partitions.values()):
+                errors.append("cert2 не найден — переподпись невозможна")
+        except Exception as e:
+            errors.append(f"cert2 check: {e}")
+
+    for i, jp in enumerate(json_patches):
+        nm = jp.get("name", f"patch_{i}")
+        try:
+            ndl = _hex_to_bytes(jp.get("needle_hex", ""))
+            pat = _hex_to_bytes(jp.get("patch_hex", ""))
+        except Exception as e:
+            errors.append(f"'{nm}': hex: {e}"); continue
+        if len(ndl) == 0:
+            errors.append(f"'{nm}': пустой needle"); continue
+        if len(ndl) != len(pat):
+            errors.append(f"'{nm}': длина needle ({len(ndl)}) != patch ({len(pat)})"); continue
+        if len(ndl) < 4:
+            warnings.append(f"'{nm}': короткий needle ({len(ndl)} байт)")
+
+        hint = jp.get("offset_hint")
+        req = jp.get("required", False)
+
+        if hint is not None:
+            if hint < 0 or hint + len(ndl) > len(buf):
+                errors.append(f"'{nm}': offset_hint вне границ"); continue
+            if buf[hint:hint+len(ndl)] == ndl:
+                offs = [hint]
+            elif buf[hint:hint+len(pat)] == pat:
+                plan.append({"type": "json_patch", "name": nm, "offset": hint,
+                             "length": len(pat), "status": "already_applied"}); continue
+            else:
+                (errors if req else warnings).append(f"'{nm}': needle не найден по offset_hint"); continue
+        else:
+            offs = _find_all(buf, ndl)
+            poffs = _find_all(buf, pat)
+            if offs and poffs:
+                errors.append(f"'{nm}': конфликт — найдены и needle, и patch"); continue
+            if not offs and poffs:
+                plan.append({"type": "json_patch", "name": nm, "offset": poffs[0],
+                             "length": len(pat), "status": "already_applied"}); continue
+            if not offs:
+                (errors if req else warnings).append(f"'{nm}': needle не найден"); continue
+            if len(offs) > 1:
+                errors.append(f"'{nm}': {len(offs)} совпадений, нужен offset_hint"); continue
+
+        off = offs[0]
+        rng = (off, off + len(pat))
+        if not allow_ovl:
+            for s, e in occupied:
+                if rng[0] < e and rng[1] > s:
+                    errors.append(f"'{nm}': пересечение с другим патчем"); break
+            else:
+                occupied.append(rng)
+        else:
+            occupied.append(rng)
+        plan.append({"type": "json_patch", "name": nm, "offset": off,
+                     "length": len(pat), "status": "ready"})
+
+    if spoof:
+        aoffs = _find_all(buf, _SPOOF_ANCHOR)
+        if not aoffs:
+            (errors if spoof_req else warnings).append("Якорь lock state не найден")
+        elif len(aoffs) > 1:
+            errors.append(f"Якорь lock state: {len(aoffs)} совпадений")
+        else:
+            off = aoffs[0] + _SPOOF_DELTA
+            rng = (off, off + 2)
+            if not allow_ovl:
+                for s, e in occupied:
+                    if rng[0] < e and rng[1] > s:
+                        errors.append("Spoof lock: пересечение с патчем"); break
+                else:
+                    occupied.append(rng)
+            plan.append({"type": "spoof_lock", "offset": off, "length": 2, "status": "ready"})
+
+    return {"ok": len(errors) == 0, "errors": errors, "warnings": warnings, "plan": plan}
+
+# ── patch ──
+
+def patch_buffer(data: bytes, opts: dict) -> dict:
+    errors, warnings, report = [], [], []
+    rid = 0
+    buf = bytearray(data)
+
+    strategy = opts.get("strategy", "none")
+    json_patches = opts.get("json_patches") or []
+    spoof = opts.get("spoof_lock_state", False)
+    spoof_req = opts.get("spoof_lock_required", False)
+    fail_req = opts.get("fail_on_required_not_found", False)
+
+    need_rsa = strategy in ("replace_rsa_key", "replace_and_resign")
+    need_resign = strategy in ("resign_cert2", "replace_and_resign")
+
+    # 1. RSA replace
+    if need_rsa:
+        rid += 1
+        try:
+            new_mod = _rsa2048_modulus_from_pem(opts.get("rsa_private_key_pem") or "")
+            offs = _find_all(bytes(buf), _get_xiaomi_modulus())
+            if not offs:
+                raise ValueError("RSA модуль не найден")
+            off = offs[0]
+            buf[off:off+256] = new_mod
+            report.append({"id": rid, "type": "replace_rsa_key", "name": "RSA-2048",
+                           "offset": off, "length": 256, "status": "applied", "message": None})
+            if len(offs) > 1:
+                warnings.append(f"RSA модуль в {len(offs)} местах, заменён первый")
+        except Exception as e:
+            report.append({"id": rid, "type": "replace_rsa_key", "name": "RSA-2048",
+                           "offset": None, "length": 256, "status": "error", "message": str(e)})
+            errors.append(f"RSA: {e}")
+
+    # 2. JSON patches
+    for i, jp in enumerate(json_patches):
+        rid += 1
+        nm = jp.get("name", f"patch_{i}")
+        req = jp.get("required", False)
+        try:
+            ndl = _hex_to_bytes(jp.get("needle_hex", ""))
+            pat = _hex_to_bytes(jp.get("patch_hex", ""))
+        except Exception as e:
+            report.append({"id": rid, "type": "json_patch", "name": nm,
+                           "offset": None, "length": 0, "status": "error", "message": f"hex: {e}"})
+            errors.append(f"'{nm}': {e}"); continue
+
+        if len(ndl) != len(pat):
+            report.append({"id": rid, "type": "json_patch", "name": nm,
+                           "offset": None, "length": len(ndl), "status": "error",
+                           "message": "длина needle != patch"})
+            errors.append(f"'{nm}': длина needle != patch"); continue
+
+        hint = jp.get("offset_hint")
+        if hint is not None:
+            if hint < 0 or hint + len(ndl) > len(buf):
+                report.append({"id": rid, "type": "json_patch", "name": nm,
+                               "offset": hint, "length": len(ndl), "status": "error",
+                               "message": "offset_hint вне границ"})
+                errors.append(f"'{nm}': offset_hint вне границ"); continue
+            if bytes(buf[hint:hint+len(ndl)]) == ndl:
+                off = hint
+            elif bytes(buf[hint:hint+len(pat)]) == pat:
+                report.append({"id": rid, "type": "json_patch", "name": nm,
+                               "offset": hint, "length": len(pat),
+                               "status": "already_applied", "message": None}); continue
+            else:
+                report.append({"id": rid, "type": "json_patch", "name": nm,
+                               "offset": None, "length": len(ndl), "status": "not_found",
+                               "message": "needle не найден по offset_hint"})
+                (errors if (req or fail_req) else warnings).append(f"'{nm}': needle не найден"); continue
+        else:
+            offs = _find_all(bytes(buf), ndl)
+            poffs = _find_all(bytes(buf), pat)
+            if offs and poffs:
+                report.append({"id": rid, "type": "json_patch", "name": nm,
+                               "offset": offs[0], "length": len(ndl), "status": "conflict",
+                               "message": "найдены и needle, и patch"})
+                errors.append(f"'{nm}': конфликт"); continue
+            if not offs and poffs:
+                report.append({"id": rid, "type": "json_patch", "name": nm,
+                               "offset": poffs[0], "length": len(pat),
+                               "status": "already_applied", "message": None}); continue
+            if not offs:
+                report.append({"id": rid, "type": "json_patch", "name": nm,
+                               "offset": None, "length": len(ndl), "status": "not_found",
+                               "message": "needle не найден"})
+                (errors if (req or fail_req) else warnings).append(f"'{nm}': needle не найден"); continue
+            if len(offs) > 1:
+                report.append({"id": rid, "type": "json_patch", "name": nm,
+                               "offset": None, "length": len(ndl), "status": "error",
+                               "message": f"{len(offs)} совпадений, нужен offset_hint"})
+                errors.append(f"'{nm}': несколько совпадений"); continue
+            off = offs[0]
+
+        buf[off:off+len(pat)] = pat
+        report.append({"id": rid, "type": "json_patch", "name": nm,
+                       "offset": off, "length": len(pat), "status": "applied", "message": None})
+
+    # 3. Spoof lock state
+    if spoof:
+        rid += 1
+        aoffs = _find_all(bytes(buf), _SPOOF_ANCHOR)
+        if not aoffs:
+            st = "not_found" if spoof_req else "skipped"
+            report.append({"id": rid, "type": "spoof_lock", "name": "spoof_lock_state",
+                           "offset": None, "length": 2, "status": st, "message": "якорь не найден"})
+            (errors if spoof_req else warnings).append("Spoof: якорь не найден")
+        elif len(aoffs) > 1:
+            report.append({"id": rid, "type": "spoof_lock", "name": "spoof_lock_state",
+                           "offset": None, "length": 2, "status": "error",
+                           "message": f"{len(aoffs)} совпадений якоря"})
+            errors.append("Spoof: несколько якорей")
+        else:
+            off = aoffs[0] + _SPOOF_DELTA
+            if bytes(buf[off:off+2]) == _SPOOF_PATCH:
+                report.append({"id": rid, "type": "spoof_lock", "name": "spoof_lock_state",
+                               "offset": off, "length": 2, "status": "already_applied", "message": None})
+            else:
+                buf[off:off+2] = _SPOOF_PATCH
+                report.append({"id": rid, "type": "spoof_lock", "name": "spoof_lock_state",
+                               "offset": off, "length": 2, "status": "applied", "message": None})
+
+    # 4. Resign cert2
+    if need_resign:
+        rid += 1
+        try:
+            from liblk.image import LkImage
+            from liblk.structures.certificate import Certificate
+
+            # Свежий образ из патченного буфера: partition._data отражают изменения
+            img2 = LkImage(bytes(buf))
+            cnt = 0
+            for pname, part in img2.partitions.items():
+                if not part.certs or len(part.certs) < 2:
+                    continue
+                st = part.matches_cert2()
+                if st is True:
+                    continue
+                if st is None:
+                    warnings.append(f"cert2 '{pname}' не парсится"); continue
+                try:
+                    hh, ih = part.compute_hashes()
+                    c2 = part.certs[1]
+                    orig = bytes(c2.data)
+                    cert = Certificate.from_bytes(orig)
+                    new_raw = cert.build_hash_override_block(hh, ih)
+                    c2.data = new_raw
+                    cnt += 1
+                except Exception as e:
+                    warnings.append(f"Resign '{pname}': {e}")
+
+            if cnt:
+                img2._rebuild_contents()
+                buf = bytearray(bytes(img2.contents))
+                report.append({"id": rid, "type": "resign_cert2", "name": f"cert2 ×{cnt}",
+                               "offset": None, "length": None, "status": "applied",
+                               "message": f"переподписано {cnt} партиций"})
+            else:
+                report.append({"id": rid, "type": "resign_cert2", "name": "cert2",
+                               "offset": None, "length": None, "status": "skipped",
+                               "message": "нет партиций для переподписи"})
+        except Exception as e:
+            report.append({"id": rid, "type": "resign_cert2", "name": "cert2",
+                           "offset": None, "length": None, "status": "error", "message": str(e)})
+            errors.append(f"Resign: {e}")
+
+    sha = hashlib.sha256(bytes(buf)).hexdigest()
+    return {"ok": len(errors) == 0, "output_image": bytes(buf),
+            "output_name": "lk_patched.img", "sha256": sha,
+            "report": report, "warnings": warnings, "errors": errors}
