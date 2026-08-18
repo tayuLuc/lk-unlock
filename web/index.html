@@ -1841,13 +1841,16 @@ async function showKeyFingerprint(){
   async function signToken(privateKey,token){
     const jwk=await crypto.subtle.exportKey('jwk',privateKey);
     const d=bytesToBigInt(b64UrlToBytes(jwk.d)), n=bytesToBigInt(b64UrlToBytes(jwk.n));
-    // PKCS#1 v1.5 block (256 bytes): 00 01 FF..FF 00 || SHA-1 DigestInfo || token
+    // ADB signs SHA1(token): the device compares the digest embedded in the
+    // signature against SHA1(token) — the raw 20-byte token is NOT the hash.
+    const digest=new Uint8Array(await crypto.subtle.digest('SHA-1',token));
+    // PKCS#1 v1.5 block (256 bytes): 00 01 FF..FF 00 || SHA-1 DigestInfo || SHA1(token)
     const block=new Uint8Array(256);
     block[0]=0x00; block[1]=0x01;
     for(let i=2;i<220;i++) block[i]=0xFF;
     block[220]=0x00;
     block.set([0x30,0x21,0x30,0x09,0x06,0x05,0x2b,0x0e,0x03,0x02,0x1a,0x05,0x00,0x04,0x14],221);
-    block.set(token,236);
+    block.set(digest,236);
     return bigIntToBytes(modPow(bytesToBigInt(block),d,n),256);
   }
   // Android adbd expects AUTH_PUBLICKEY payload = base64(mincrypt
@@ -1905,11 +1908,13 @@ async function showKeyFingerprint(){
     logPkt('OUT',cmd,arg0,arg1,payload.length);
     await device.transferOut(outEp,packet);
   }
-  async function readPacket(device,inEp){
+  async function readPacket(device,inEp,timeoutMs=15000){
+    // Timeout guard: a silent phone must not hang the app forever.
+    const withTimeout = p => Promise.race([p, new Promise((_,rej)=>setTimeout(()=>rej(new Error('USB read timeout')),timeoutMs))]);
     let header=new Uint8Array();
     while(header.length<24){
-      const res=await device.transferIn(inEp,24-header.length);
-      if(res.status!=='ok') throw new Error('USB transfer error');
+      const res=await withTimeout(device.transferIn(inEp,24-header.length));
+      if(res.status!=='ok') throw new Error('USB transfer error (status '+res.status+')');
       const chunk=new Uint8Array(res.data.buffer,res.data.byteOffset,res.data.byteLength);
       const merged=new Uint8Array(header.length+chunk.length); merged.set(header); merged.set(chunk,header.length); header=merged;
     }
@@ -1918,8 +1923,8 @@ async function showKeyFingerprint(){
     let payload=new Uint8Array();
     if(len>0){
       while(payload.length<len){
-        const res=await device.transferIn(inEp,len-payload.length);
-        if(res.status!=='ok') throw new Error('USB transfer error');
+        const res=await withTimeout(device.transferIn(inEp,len-payload.length));
+        if(res.status!=='ok') throw new Error('USB transfer error (status '+res.status+')');
         const chunk=new Uint8Array(res.data.buffer,res.data.byteOffset,res.data.byteLength);
         const merged=new Uint8Array(payload.length+chunk.length); merged.set(payload); merged.set(chunk,payload.length); payload=merged;
       }
@@ -2008,28 +2013,45 @@ async function showKeyFingerprint(){
     const device=await navigator.usb.requestDevice({filters:[{classCode:255,subclassCode:66,protocolCode:1}]});
     if(!device) return null;
     await device.open();
-    let adbInterface=null;
+    // Iterate configurations/interfaces/alternates exactly like
+    // webadb.com: find the ALTERNATE whose class matches the ADB interface.
+    let chosen=null;
     for(const config of device.configurations||[]){
-      await device.selectConfiguration(config.configurationValue);
-      adbInterface=config.interfaces.find(i=>
-        i.alternate.interfaceClass===255 && i.alternate.interfaceSubclass===66 && i.alternate.interfaceProtocol===1);
-      if(adbInterface) break;
+      if(chosen) break;
+      for(const iface of config.interfaces){
+        for(const alt of iface.alternates){
+          if(alt.interfaceClass===255 && alt.interfaceSubclass===66 && alt.interfaceProtocol===1){
+            chosen={config,iface,alt}; break;
+          }
+        }
+        if(chosen) break;
+      }
     }
-    if(!adbInterface) throw new Error('ADB interface not found');
-    const interfaceNumber=adbInterface.interfaceNumber, alternate=adbInterface.alternate;
-    try{ await device.claimInterface(interfaceNumber); }
+    if(!chosen) throw new Error('ADB interface not found');
+    const {config,iface,alt}=chosen;
+    if(device.configuration?.configurationValue!==config.configurationValue)
+      await device.selectConfiguration(config.configurationValue);
+    try{ if(!iface.claimed) await device.claimInterface(iface.interfaceNumber); }
     catch(claimErr){
       const msg=(claimErr.message||'').toLowerCase();
       if(msg.includes('claim')||msg.includes('in use')) throw new Error('USB_BLOCKED');
       throw claimErr;
     }
-    if(alternate.alternateSetting!==0) await device.selectAlternateInterface(interfaceNumber,alternate.alternateSetting);
-    const inEp=alternate.endpoints.find(e=>e.direction==='in').endpointNumber;
-    const outEp=alternate.endpoints.find(e=>e.direction==='out').endpointNumber;
-    await sendPacket(device,outEp,ADB.CMD_CNXN,ADB.VERSION,ADB.MAX_PAYLOAD,
+    if(iface.alternate.alternateSetting!==alt.alternateSetting)
+      await device.selectAlternateInterface(iface.interfaceNumber,alt.alternateSetting);
+    // Pick endpoints from the MATCHING alternate, in declared order.
+    let inEp=null, outEp=null;
+    for(const ep of alt.endpoints){
+      if(ep.direction==='in'&&!inEp) inEp=ep;
+      else if(ep.direction==='out'&&!outEp) outEp=ep;
+      if(inEp&&outEp) break;
+    }
+    if(!inEp||!outEp) throw new Error('ADB endpoints not found (in='+(inEp?.endpointNumber||'-')+' out='+(outEp?.endpointNumber||'-')+')');
+    log('Interface #'+iface.interfaceNumber+' alt '+alt.alternateSetting+': IN ep '+inEp.endpointNumber+' ('+inEp.type+') OUT ep '+outEp.endpointNumber+' ('+outEp.type+')');
+    await sendPacket(device,outEp.endpointNumber,ADB.CMD_CNXN,ADB.VERSION,ADB.MAX_PAYLOAD,
       new TextEncoder().encode('host::features=shell_v2,cmd,stat_v2,ls_v2,fixed_push_mkdir,apex,abb,remount_shell,track_app,sendrecv_v2\0'));
-    await authenticate(device,inEp,outEp);
-    return {connection:new AdbConnection(new AdbDaemon(device,inEp,outEp)), name:device.productName||device.serialNumber||'Android', raw:device};
+    await authenticate(device,inEp.endpointNumber,outEp.endpointNumber);
+    return {connection:new AdbConnection(new AdbDaemon(device,inEp.endpointNumber,outEp.endpointNumber)), name:device.productName||device.serialNumber||'Android', raw:device};
   }
   $('#btnPkts').onclick=()=>{
     pktLogOn=!pktLogOn;
