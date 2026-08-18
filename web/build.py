@@ -92,10 +92,43 @@ def step_pyfiles():
     print(f"pyfiles.js: {len(files)} files, {out.stat().st_size // 1024} KB")
 
 
+def step_adb_module():
+    """Inline the vendored browser ADB module into index.html as a classic
+    script (build-time only; runtime stays offline)."""
+    html_path = WEB / "index.html"
+    html = html_path.read_text()
+    marker_start = "  // ── Custom ADB-over-WebUSB implementation ─────────────────────────────"
+    anchor = "  // Wire the module's packet logger to the on-page log + toggle."
+    if marker_start not in html or anchor not in html:
+        raise SystemExit("ADB module markers not found in index.html - build layout changed")
+    # Classic build: strip the trailing `export { ... }` block so all names
+    # become globals (matches how the module is used on the site).
+    module_src = (WEB / "vendor/adb-daemon-browser.js").read_text()
+    export_idx = module_src.find("\nexport {\n")
+    if export_idx != -1:
+        module_src = module_src[:export_idx]
+    # Idempotent: don't double-inject on rebuilds.
+    start = html.index(marker_start)
+    injected_end = html.find(anchor)
+    if injected_end == -1 or injected_end < start:
+        raise SystemExit("packet logger anchor not found after module marker")
+    injected = (
+        marker_start
+        + "\n  // Inlined from vendor/adb-daemon-browser.js by web/build.py - do not edit.\n"
+        + "  // Sync source: scripts/sync-adb-module.sh (github.com/tayuLuc/ya-webadb)\n"
+        + module_src.rstrip()
+        + "\n\n"
+    )
+    html = html[:start] + injected + html[injected_end:]
+    html_path.write_text(html)
+    print(f"index.html: inlined ADB module ({len(module_src)} bytes)")
+
+
 if __name__ == "__main__":
     print("== build lk-unlock web ==")
     step_pyodide()
     step_pyasn1()
     step_pyfiles()
+    step_adb_module()
     (WEB / ".nojekyll").touch()
     print("Done. Local check: uv run python -m http.server -d web 8000")
