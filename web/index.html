@@ -130,6 +130,7 @@ textarea:focus{outline:none;border-color:var(--acc1);box-shadow:0 0 0 3px rgba(1
 .hash.on{opacity:1;transform:none}
 
 /* ---------- token explanation ---------- */
+.disclaimer{margin:8px 0 0;font:12px var(--sans);color:#f5a623}
 .token-explain{margin:14px 0 0;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:rgba(255,255,255,.02)}
 .token-explain summary{cursor:pointer;font:12.5px var(--sans);color:var(--acc2);user-select:none}
 .token-explain p{margin:8px 0 0;font:12.5px/1.6 var(--sans);color:var(--muted)}
@@ -327,6 +328,7 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
     <article class="card">
       <div class="c-head"><span class="num">02</span><h2>Подпись токена</h2><span class="c-tag">auth</span></div>
       <p class="c-desc">Вставьте токен, полученный от устройства — на выходе подпись signature.bin.</p>
+      <p class="disclaimer">⚠️ Определение прошивки/устройства эвристическое. Патч и прошивка LK выполняются на ваш страх и риск.</p>
       <label class="lbl" for="token">ТОКЕН (HEX / BASE64)</label>
       <textarea id="token" spellcheck="false" placeholder="Вставьте токен…"></textarea>
       <label class="lbl" for="fingerprint" style="margin-top:10px">FINGERPRINT (необязательно, для сверки ОС)</label>
@@ -647,7 +649,10 @@ async function onFile(f){
 async function runDiag(mySeq){
   if(!state.ready||!state.buf)return;
   try{
-    const d=await window.lkUnlock.diagnose(state.buf.slice(0));
+    // Diagnose only the first 2MB (magic + OEM key) to avoid loading the
+    // whole file into Pyodide memory (OOM guard per Qwen review).
+    const diagBuf = state.buf.slice(0, Math.min(state.buf.byteLength, 2*1024*1024));
+    const d=await window.lkUnlock.diagnose(diagBuf);
     if(mySeq !== fileSeq) return;  // stale result
     const parts=d.lk_partitions&&d.lk_partitions.length?d.lk_partitions.join(','):'нет';
     const key=d.has_oem_key?`да (0x${(d.oem_key_offset||0).toString(16)})`:'НЕТ';

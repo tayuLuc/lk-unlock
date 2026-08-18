@@ -437,12 +437,26 @@ def parse_token(token_text: str) -> str:
 # ---------------------------------------------------------------------------
 # UX 2: Detect MIUI vs HyperOS from the build fingerprint
 # ---------------------------------------------------------------------------
+# Version prefix -> (os_name, warning). Xiaomi changes naming often; keep
+# this data-driven so new schemes are a one-line addition. V816/V814 look
+# like MIUI 14 but can actually be HyperOS 1.0.
+_OS_PREFIX_MAP = {
+    "OS1": ("HyperOS", "Это HyperOS, НЕ MIUI — проверьте совместимость lk.img"),
+    "OS2": ("HyperOS", "Это HyperOS, НЕ MIUI — проверьте совместимость lk.img"),
+    "V816": ("MIUI", "MIUI 14 (возможно HyperOS 1.0) — проверьте реальную ОС"),
+    "V814": ("MIUI", "MIUI 14 (возможно HyperOS 1.0) — проверьте реальную ОС"),
+    "V13": ("MIUI", None),
+    "V12": ("MIUI", None),
+    "V14": ("MIUI", None),
+}
+
+
 def detect_os(fingerprint: str) -> str:
     """Detect MIUI/HyperOS from the build fingerprint.
 
     Xiaomi changed naming: a fingerprint ending in /V816.* (MIUI 14 style)
-    can actually be HyperOS 1.0. V814/V816 prefixes map to MIUI 14 on
-    Android 13 but may be HyperOS. Returns JSON with os/version/warning.
+    can actually be HyperOS 1.0. Version mapping lives in _OS_PREFIX_MAP so
+    new naming schemes are easy to add. Returns JSON with os/version/warning.
     """
     result = {"os": "unknown", "version": "", "raw": fingerprint, "warning": None}
     if not fingerprint:
@@ -451,17 +465,13 @@ def detect_os(fingerprint: str) -> str:
     if not m:
         return json.dumps(result)
     code = m.group(1)
-    if code.startswith("OS"):
-        result["os"] = "HyperOS"
+    prefix = code.split(".")[0]
+    os_name, warning = _OS_PREFIX_MAP.get(prefix, (None, None))
+    if os_name:
+        result["os"] = os_name
         result["version"] = code
-        result["warning"] = "Это HyperOS, НЕ MIUI — проверьте совместимость lk.img"
-    elif code.startswith("V816") or code.startswith("V814"):
-        result["os"] = "MIUI"
-        result["version"] = code
-        result["warning"] = "MIUI 14 (возможно HyperOS 1.0) — проверьте реальную ОС"
-    elif code.startswith("V13") or code.startswith("V12") or code.startswith("V14"):
-        result["os"] = "MIUI"
-        result["version"] = code
+        if warning:
+            result["warning"] = warning
     else:
         result["os"] = "unknown"
         result["version"] = code
