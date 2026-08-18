@@ -591,6 +591,7 @@ function analyzeToken(){
   });
 }
 els.token.addEventListener('input',()=>{clearTimeout(tokenTimer);tokenTimer=setTimeout(analyzeToken,300);});
+els.fingerprint.addEventListener('input',()=>{clearTimeout(tokenTimer);tokenTimer=setTimeout(analyzeToken,300);});
 
 function busy(btn,fn){
   state.busy=btn;const old=btn.textContent;
