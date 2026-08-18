@@ -881,7 +881,7 @@ window.lkUnlock={
   ready:()=>state.ready,
   // Original API (parity-test compatible)
   init:jwk=>rpc('init',{jwk}),
-  patchBuffer:(buf,jwk)=>(jwk?window.lkUnlock.init(jwk):Promise.resolve())
+  patchBufferLegacy:(buf,jwk)=>(jwk?window.lkUnlock.init(jwk):Promise.resolve())
       .then(()=>rpc('patch',{buf},[buf])),
   signToken:text=>rpc('sign',{token:text}),
   // Extended API for key management
@@ -1120,7 +1120,7 @@ const lkPatchUi = (() => {
     if (state.els.dlImg) { state.els.dlImg.hidden = true; state.els.dlImg.style.display = 'none'; }
   }
 
-  return { init, onFileChange, runDiagPatch, startPatchJob };
+  return { init, onFileChange, runDiagPatch, startPatchJob, getState: () => ({ ...state }) };
 })();
 lkPatchUi.init();
 
@@ -1214,7 +1214,7 @@ function loadJwk(){
 }
 
 function sync(){
-  els.patch.disabled=!state.ready||!state.buf||!!state.busy;
+  // btnPatch is managed exclusively by lkPatchUi (strategy phase), not here.
   els.sign.disabled=!state.ready||!els.token.value.trim()||!!state.busy;
   els.importBtn.disabled=!state.ready||!!state.busy;
   els.exportBtn.disabled=!state.ready||!!state.busy;
@@ -1407,19 +1407,6 @@ els.exportBtn.onclick=()=>busy(els.exportBtn,async()=>{
 
 /* ================= действия ================= */
 els.patch.onclick=()=>lkPatchUi.startPatchJob();
-if(false){ /* legacy patch flow kept for reference */ els.patch.onclick=()=>busy(els.patch,async()=>{
-  log(t('status.patching'));
-  const r=await window.lkUnlock.patchBuffer(state.buf.slice(0));
-  state.pem=r.pem;
-  // Show an active download link instead of auto-clicking after await
-  // (browsers block programmatic downloads outside a user gesture).
-  const url=URL.createObjectURL(new Blob([r.img]));
-  const a=els.dlImg;
-  a.href=url; a.style.display='flex';
-  setTimeout(()=>URL.revokeObjectURL(url),30000);
-  showHash('#patchHash',r.sha256);
-  log(t('status.patchDone',{hash:r.sha256.slice(0,16)}));
-}); }
 
 els.sign.onclick=()=>busy(els.sign,async()=>{
   log(t('status.signing'));

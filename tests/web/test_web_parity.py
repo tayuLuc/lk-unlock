@@ -74,6 +74,28 @@ def native_reference(tmp_path) -> dict:
     return {"patched": sha(patched_bytes), "sig": sha(sig_bytes)}
 
 
+def buffer_reference() -> dict:
+    """New patch API reference: same code as the WASM side, run natively."""
+    import sys
+
+    sys.path.insert(0, str(WEB / "python"))
+    sys.path.insert(0, str(ROOT / "src"))
+    sys.path.insert(0, str(ROOT / "vendor" / "liblk"))
+
+    import patcher_web as _pw
+
+    _pw.XIAOMI_PEM = ROOT / "src/lk_unlock/xiaomi.pem"
+    _pw.set_key_json(TEST_KEY_JWK.read_text())
+    opts = {
+        "strategy": "replace_and_resign",
+        "rsa_private_key_pem": TEST_KEY_PEM.read_text(),
+        "spoof_lock_state": False,
+        "json_patches": [],
+    }
+    r = _pw.patch_buffer(LK_IMG.read_bytes(), opts)
+    return {"buf_sha": r["sha256"], "buf_ok": r["ok"]}
+
+
 @pytest.fixture(scope="module")
 def server():
     class H(http.server.SimpleHTTPRequestHandler):
@@ -93,7 +115,7 @@ PATCH_JS = textwrap.dedent(
     """
     async ({img, jwk}) => {
         const buf = Uint8Array.from(atob(img), c => c.charCodeAt(0)).buffer;
-        const r = await window.lkUnlock.patchBuffer(buf, jwk);
+        const r = await window.lkUnlock.patchBufferLegacy(buf, jwk);
         return {sha: r.sha256, pem: r.pem};
     }
     """
@@ -108,6 +130,7 @@ def test_wasm_equals_native(server, tmp_path):
     )
 
     exp = native_reference(tmp_path)
+    ref = buffer_reference()
 
     img_b64 = base64.b64encode(LK_IMG.read_bytes()).decode()
     jwk = json.loads(TEST_KEY_JWK.read_text())
@@ -133,11 +156,19 @@ def test_wasm_equals_native(server, tmp_path):
         page.set_input_files("#lkfile", str(LK_IMG))
         page.wait_for_selector("#btnPatch:not([disabled])", timeout=30000)
         page.click("#btnPatch")
+        # New patch API (strategy A+B): report sha must match native buffer reference.
+        page.wait_for_function(
+            "document.getElementById('lk-report-sha').textContent !== ''",
+            timeout=90000,
+        )
+        ui_sha = page.evaluate("document.getElementById('lk-report-sha').textContent")
+        assert ref["buf_ok"], "patch_buffer: native reference failed"
+        assert ui_sha == ref["buf_sha"], "UI patch: WASM != native patch_buffer"
         page.wait_for_selector("#dlImg", state="visible", timeout=30000)
         with page.expect_download() as dl:
             page.click("#dlImg")
         assert dl.value.suggested_filename == "lk_patched.img"
-        assert sha(Path(dl.value.path()).read_bytes()) == exp["patched"]
+        assert sha(Path(dl.value.path()).read_bytes()) == ref["buf_sha"]
 
         assert not errors, f"page errors: {errors}"
         browser.close()
