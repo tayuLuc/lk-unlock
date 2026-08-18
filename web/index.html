@@ -188,6 +188,17 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
 .s-row{display:flex;justify-content:space-between;margin-top:10px;
   font:12px var(--mono);color:var(--muted)}
 
+/* ---------- patch strategy / json / report (lkPatchUi) ---------- */
+.lk-radios{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+.lk-radio,.lk-check{display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:400;font-size:13.5px;color:var(--text)}
+.lk-table{width:100%;border-collapse:collapse;font:12px/1.5 var(--mono);margin-top:8px}
+.lk-table th,.lk-table td{border:1px solid var(--border);padding:4px 8px;text-align:left;word-break:break-all;color:var(--text)}
+.lk-table th{background:rgba(255,255,255,.05);font-weight:600;color:var(--muted)}
+.lk-warning{color:#f5a623;font-size:12.5px;margin-top:6px;white-space:pre-wrap}
+.lk-error{color:#ef4444;font-size:12.5px;margin-top:6px;white-space:pre-wrap}
+.lk-collapsible{margin-top:12px;border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:rgba(255,255,255,.02)}
+.lk-collapsible summary{cursor:pointer;font:12.5px var(--sans);color:var(--acc2);user-select:none}
+.lk-strategy-block,.lk-spoof-block{margin-top:12px}
 /* ---------- key status badge (card 1) ---------- */
 .key-badge{display:flex;align-items:center;gap:8px;font:11.5px var(--mono);
   color:var(--muted);padding:6px 12px;border:1px solid var(--border);
@@ -256,7 +267,6 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
     </svg>
     MTK Forge
   </div>
-  <div class="badge" id="badge"><span class="dot"></span><span id="badgeText" data-i18n="status.pyodideLoading">Загрузка Pyodide…</span></div>
   <button id="langBtn" type="button" style="margin-left:8px;cursor:pointer;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:999px;padding:6px 13px;font:12px var(--mono);color:var(--muted)">EN</button>
 </header>
 
@@ -314,6 +324,62 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
           <div class="key-fingerprint-short" id="keyFingerprintShort"></div>
         </div>
       </div>
+
+      <!-- Patch strategy, spoof, JSON patches, report (lkPatchUi) -->
+      <div class="row lk-strategy-block">
+        <label class="lbl" data-i18n="lk.strategy.title">Стратегия патчинга</label>
+        <div class="lk-radios">
+          <label class="lk-radio"><input type="radio" name="lk-strategy" value="replace_rsa_key" id="lk-strat-a" checked> <span data-i18n="lk.strategy.a.label">A: Замена RSA</span></label>
+          <label class="lk-radio"><input type="radio" name="lk-strategy" value="replace_and_resign" id="lk-strat-ab"> <span data-i18n="lk.strategy.ab.label">A+B: Замена + Переподпись</span></label>
+          <label class="lk-radio"><input type="radio" name="lk-strategy" value="resign_cert2" id="lk-strat-b"> <span data-i18n="lk.strategy.b.label">B: Только переподпись</span></label>
+        </div>
+        <div id="lk-strategy-warn" class="lk-warning" hidden></div>
+      </div>
+
+      <div class="row lk-spoof-block">
+        <label class="lk-check"><input type="checkbox" id="lk-spoof-lock"> <span data-i18n="lk.spoof.label">Spoof Lock State (seccfg)</span></label>
+      </div>
+
+      <details class="lk-collapsible" id="lk-json-details">
+        <summary data-i18n="lk.json.title">Custom JSON patches</summary>
+        <div class="row">
+          <input type="file" id="lk-json-file" accept=".json" hidden>
+          <button class="btn mini ghost" id="lk-json-load" data-i18n="lk.json.load">Загрузить JSON</button>
+          <button class="btn mini ghost" id="lk-json-clear" data-i18n="lk.json.clear">Очистить</button>
+          <button class="btn mini primary" id="lk-json-validate" data-i18n="lk.button.validate">Проверить</button>
+          <span class="meta" id="lk-json-count"></span>
+        </div>
+        <table class="lk-table" id="lk-json-table" hidden>
+          <thead><tr>
+            <th data-i18n="lk.json.col.name">Имя</th>
+            <th data-i18n="lk.json.col.needle">Needle</th>
+            <th data-i18n="lk.json.col.patch">Patch</th>
+            <th data-i18n="lk.json.col.status">Статус</th>
+          </tr></thead>
+          <tbody id="lk-json-tbody"></tbody>
+        </table>
+        <div id="lk-json-errors" class="lk-error" hidden></div>
+      </details>
+
+      <details class="lk-collapsible" id="lk-report-details" hidden>
+        <summary data-i18n="lk.report.title">Отчёт по патчам</summary>
+        <div id="lk-report-warnings" class="lk-warning" hidden></div>
+        <div id="lk-report-errors" class="lk-error" hidden></div>
+        <table class="lk-table" id="lk-report-table">
+          <thead><tr>
+            <th data-i18n="lk.report.col.action">Действие</th>
+            <th data-i18n="lk.report.col.offset">Offset</th>
+            <th data-i18n="lk.report.col.length">Length</th>
+            <th data-i18n="lk.report.col.status">Статус</th>
+            <th data-i18n="lk.report.col.message">Сообщение</th>
+          </tr></thead>
+          <tbody id="lk-report-tbody"></tbody>
+        </table>
+        <div class="row">
+          <span class="meta" data-i18n="lk.report.sha256">SHA-256:</span>
+          <span class="hash" id="lk-report-sha"></span>
+        </div>
+      </details>
 
       <div class="row">
         <button id="btnPatch" class="btn primary" disabled data-i18n="file.patchTo">Патчить → lk_patched.img</button>
@@ -503,6 +569,27 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
       'file.tooLarge': 'Файл слишком большой ({mb} МБ). Максимум 64 МБ.',
       'file.downloadPatched': '⬇ Скачать lk_patched.img',
       'file.patchTo': 'Патчить → lk_patched.img',
+      'lk.strategy.title': 'Стратегия патчинга',
+      'lk.strategy.a.label': 'A: Замена RSA',
+      'lk.strategy.ab.label': 'A+B: Замена + Переподпись',
+      'lk.strategy.b.label': 'B: Только переподпись',
+      'lk.strategy.warning.cert2_enforced': 'Внимание: cert2 enforced. Без переподписи (B) образ может не загрузиться.',
+      'lk.spoof.label': 'Spoof Lock State (seccfg)',
+      'lk.json.title': 'Custom JSON patches',
+      'lk.json.load': 'Загрузить JSON',
+      'lk.json.clear': 'Очистить',
+      'lk.json.count': 'Загружено патчей: {count}',
+      'lk.json.col.name': 'Имя', 'lk.json.col.needle': 'Needle', 'lk.json.col.patch': 'Patch', 'lk.json.col.status': 'Статус',
+      'lk.json.status.pending': 'ожидает', 'lk.json.status.ready': 'готов', 'lk.json.status.invalid': 'ошибка',
+      'lk.json.status.applied': 'применён', 'lk.json.status.not_found': 'не найден', 'lk.json.status.already_applied': 'уже применён',
+      'lk.json.status.conflict': 'конфликт', 'lk.json.status.skipped': 'пропущен', 'lk.json.status.error': 'ошибка',
+      'lk.json.error.parse': 'Ошибка парсинга JSON',
+      'lk.report.title': 'Отчёт по патчам',
+      'lk.report.col.action': 'Действие', 'lk.report.col.offset': 'Offset', 'lk.report.col.length': 'Length',
+      'lk.report.col.status': 'Статус', 'lk.report.col.message': 'Сообщение', 'lk.report.sha256': 'SHA-256:',
+      'lk.report.type.replace_rsa_key': 'Замена RSA', 'lk.report.type.resign_cert2': 'Переподпись cert2',
+      'lk.report.type.json_patch': 'JSON патч', 'lk.report.type.spoof_lock': 'Spoof Lock',
+      'lk.button.validate': 'Проверить',
       'file.signTo': 'Подписать → signature.bin'
     },
 
@@ -621,8 +708,30 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
       'file.tooLarge': 'File is too large ({mb} MB). Maximum is 64 MB.',
       'file.downloadPatched': '⬇ Download lk_patched.img',
       'file.patchTo': 'Patch → lk_patched.img',
+      'lk.strategy.title': 'Patching strategy',
+      'lk.strategy.a.label': 'A: Replace RSA',
+      'lk.strategy.ab.label': 'A+B: Replace + Resign',
+      'lk.strategy.b.label': 'B: Resign only',
+      'lk.strategy.warning.cert2_enforced': 'Warning: cert2 enforced. Without resign (B) the image may not boot.',
+      'lk.spoof.label': 'Spoof Lock State (seccfg)',
+      'lk.json.title': 'Custom JSON patches',
+      'lk.json.load': 'Load JSON',
+      'lk.json.clear': 'Clear',
+      'lk.json.count': 'Loaded patches: {count}',
+      'lk.json.col.name': 'Name', 'lk.json.col.needle': 'Needle', 'lk.json.col.patch': 'Patch', 'lk.json.col.status': 'Status',
+      'lk.json.status.pending': 'pending', 'lk.json.status.ready': 'ready', 'lk.json.status.invalid': 'invalid',
+      'lk.json.status.applied': 'applied', 'lk.json.status.not_found': 'not found', 'lk.json.status.already_applied': 'already applied',
+      'lk.json.status.conflict': 'conflict', 'lk.json.status.skipped': 'skipped', 'lk.json.status.error': 'error',
+      'lk.json.error.parse': 'JSON parse error',
+      'lk.report.title': 'Patch report',
+      'lk.report.col.action': 'Action', 'lk.report.col.offset': 'Offset', 'lk.report.col.length': 'Length',
+      'lk.report.col.status': 'Status', 'lk.report.col.message': 'Message', 'lk.report.sha256': 'SHA-256:',
+      'lk.report.type.replace_rsa_key': 'Replace RSA', 'lk.report.type.resign_cert2': 'Resign cert2',
+      'lk.report.type.json_patch': 'JSON patch', 'lk.report.type.spoof_lock': 'Spoof Lock',
+      'lk.button.validate': 'Validate',
       'file.signTo': 'Sign → signature.bin'
     }
+
   };
 
   function detectLang() {
@@ -780,10 +889,241 @@ window.lkUnlock={
   getPem:()=>rpc('pem'),
   getJwk:()=>rpc('get_jwk'),
   diagnose:buf=>rpc('diagnose',{buf},[buf]),
+  diagnoseImage:buf=>rpc('diagnose_image',{buf},[buf]),
+  validatePatch:(buf,opts)=>rpc('validate_patch',{buf,opts},[buf]),
+  patchBuffer:(buf,opts)=>rpc('patch_buffer',{buf,opts},[buf]),
   parseToken:text=>rpc('parse_token',{token:text}),
   detectOS:fingerprint=>rpc('detect_os',{fingerprint}),
   pemFingerprint:jwk=>rpc('pem_fingerprint',{jwk}),
 };
+
+/* ============ lkPatchUi: strategy / JSON patches / report ============ */
+const lkPatchUi = (() => {
+  const state = {
+    phase: 'idle', seq: 0, file: null, fileSeq: 0, diagSeq: 0, diag: null,
+    strategyPreset: 'replace_rsa_key', spoofLockState: false, jsonPatchSet: [],
+    report: null, job: null, objectUrl: null, els: {}
+  };
+
+  function init() {
+    state.els = {
+      stratA: document.getElementById('lk-strat-a'),
+      stratAB: document.getElementById('lk-strat-ab'),
+      stratB: document.getElementById('lk-strat-b'),
+      stratWarn: document.getElementById('lk-strategy-warn'),
+      spoof: document.getElementById('lk-spoof-lock'),
+      jsonFile: document.getElementById('lk-json-file'),
+      jsonLoad: document.getElementById('lk-json-load'),
+      jsonClear: document.getElementById('lk-json-clear'),
+      jsonValidate: document.getElementById('lk-json-validate'),
+      jsonCount: document.getElementById('lk-json-count'),
+      jsonTable: document.getElementById('lk-json-table'),
+      jsonTbody: document.getElementById('lk-json-tbody'),
+      jsonErrors: document.getElementById('lk-json-errors'),
+      reportDetails: document.getElementById('lk-report-details'),
+      reportWarnings: document.getElementById('lk-report-warnings'),
+      reportErrors: document.getElementById('lk-report-errors'),
+      reportTbody: document.getElementById('lk-report-tbody'),
+      reportSha: document.getElementById('lk-report-sha'),
+      btnPatch: document.getElementById('btnPatch'),
+      dlImg: document.getElementById('dlImg'),
+      patchHash: document.getElementById('patchHash')
+    };
+    bindEvents();
+    updatePatchBtn();
+  }
+
+  function bindEvents() {
+    [state.els.stratA, state.els.stratAB, state.els.stratB].forEach(r => {
+      r.addEventListener('change', () => { state.strategyPreset = r.value; updateStrategyUI(); updatePatchBtn(); });
+    });
+    state.els.spoof.addEventListener('change', () => { state.spoofLockState = state.els.spoof.checked; });
+    state.els.jsonLoad.addEventListener('click', () => state.els.jsonFile.click());
+    state.els.jsonFile.addEventListener('change', (e) => loadJsonPatches(e.target.files[0]));
+    state.els.jsonClear.addEventListener('click', clearJsonPatches);
+    state.els.jsonValidate.addEventListener('click', validatePatches);
+  }
+
+  function onFileChange(file) {
+    state.file = file; state.fileSeq++; state.diagSeq++; state.seq++;
+    state.diag = null; state.report = null;
+    clearJsonPatches(); resetReportUI();
+    state.phase = 'idle'; updatePatchBtn();
+  }
+
+  async function runDiagPatch(buf) {
+    const seq = ++state.diagSeq;
+    state.phase = 'diagnosing'; updatePatchBtn();
+    try {
+      const res = await window.lkUnlock.diagnoseImage(buf);
+      if (seq !== state.diagSeq) return;
+      state.diag = res.ok ? res : null;
+      state.phase = res.ok ? 'ready' : 'error';
+      if (res.ok && res.recommended_strategy) {
+        state.strategyPreset = res.recommended_strategy;
+        const map = {'replace_rsa_key': state.els.stratA, 'replace_and_resign': state.els.stratAB, 'resign_cert2': state.els.stratB};
+        if (map[state.strategyPreset]) map[state.strategyPreset].checked = true;
+      }
+    } catch (e) { if (seq === state.diagSeq) { state.diag = null; state.phase = 'error'; } }
+    updateStrategyUI(); updatePatchBtn();
+  }
+
+  function updateStrategyUI() {
+    const d = state.diag;
+    const hasRsa = !!(d && d.rsa_key_found), hasCert2 = !!(d && d.cert2_present), enforced = !!(d && d.cert2_enforced);
+    state.els.stratA.disabled = !hasRsa;
+    state.els.stratAB.disabled = !hasRsa || !hasCert2;
+    state.els.stratB.disabled = !hasCert2;
+
+    if (state.els.stratA.checked) state.strategyPreset = 'replace_rsa_key';
+    else if (state.els.stratAB.checked) state.strategyPreset = 'replace_and_resign';
+    else if (state.els.stratB.checked) state.strategyPreset = 'resign_cert2';
+    else state.strategyPreset = 'none';
+
+    let warn = '';
+    if (enforced && state.strategyPreset === 'replace_rsa_key') warn = t('lk.strategy.warning.cert2_enforced');
+    state.els.stratWarn.textContent = warn; state.els.stratWarn.hidden = !warn;
+  }
+
+  function updatePatchBtn() {
+    const canPatch = state.phase === 'ready' && state.file && state.strategyPreset !== 'none' && !state.jsonPatchSet.some(p => p.status === 'invalid');
+    if (state.els.btnPatch) {
+      state.els.btnPatch.disabled = !canPatch || state.phase === 'patching';
+      if (state.phase === 'patching') state.els.btnPatch.classList.add('busy');
+      else state.els.btnPatch.classList.remove('busy');
+    }
+  }
+
+  async function loadJsonPatches(file) {
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      const arr = Array.isArray(parsed) ? parsed : [parsed];
+      state.jsonPatchSet = arr.map(p => ({
+        name: p.name || 'unnamed', needle_hex: p.needle_hex || '', patch_hex: p.patch_hex || '',
+        offset_hint: p.offset_hint || null, required: !!p.required, description: p.description || null, status: 'pending'
+      }));
+      state.jsonPatchSet.forEach(p => {
+        try {
+          if (!/^[0-9a-fA-F]+$/.test(p.needle_hex) || !/^[0-9a-fA-F]+$/.test(p.patch_hex)) throw 0;
+          if (p.needle_hex.length % 2 !== 0 || p.patch_hex.length % 2 !== 0 || p.needle_hex.length !== p.patch_hex.length) throw 0;
+          p.status = 'ready';
+        } catch { p.status = 'invalid'; }
+      });
+      state.els.jsonErrors.hidden = true;
+      renderJsonTable(); updatePatchBtn();
+    } catch (e) { state.els.jsonErrors.textContent = t('lk.json.error.parse'); state.els.jsonErrors.hidden = false; }
+  }
+
+  function clearJsonPatches() {
+    state.jsonPatchSet = []; if (state.els.jsonFile) state.els.jsonFile.value = '';
+    if (state.els.jsonErrors) state.els.jsonErrors.hidden = true;
+    renderJsonTable(); updatePatchBtn();
+  }
+
+  function renderJsonTable() {
+    if (!state.els.jsonTbody) return;
+    state.els.jsonTbody.innerHTML = '';
+    if (!state.jsonPatchSet.length) { state.els.jsonTable.hidden = true; state.els.jsonCount.textContent = ''; return; }
+    state.els.jsonTable.hidden = false;
+    state.els.jsonCount.textContent = t('lk.json.count', {count: state.jsonPatchSet.length});
+    state.jsonPatchSet.forEach(p => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td></td><td></td><td></td><td></td>';
+      tr.children[0].textContent = p.name;
+      tr.children[1].textContent = p.needle_hex.substring(0, 8) + (p.needle_hex.length > 8 ? '…' : '');
+      tr.children[2].textContent = p.patch_hex.substring(0, 8) + (p.patch_hex.length > 8 ? '…' : '');
+      tr.children[3].textContent = t('lk.json.status.' + p.status) || p.status;
+      if (['invalid', 'error', 'conflict', 'not_found'].includes(p.status)) tr.children[3].classList.add('lk-error');
+      state.els.jsonTbody.appendChild(tr);
+    });
+  }
+
+  async function buildOpts() {
+    const opts = {
+      strategy: state.strategyPreset, spoof_lock_state: state.spoofLockState, spoof_lock_required: false,
+      json_patches: state.jsonPatchSet.map(p => ({ name: p.name, needle_hex: p.needle_hex, patch_hex: p.patch_hex, offset_hint: p.offset_hint, required: p.required, description: p.description })),
+      fail_on_required_not_found: false, unsafe_allow_overlaps: false
+    };
+    if (state.strategyPreset.includes('replace') || state.strategyPreset.includes('resign')) {
+      try {
+        const r = await window.lkUnlock.getPem();
+        opts.rsa_private_key_pem = (r && typeof r === 'object' && r.pem) ? r.pem : r;
+      } catch (e) { opts.rsa_private_key_pem = null; }
+    }
+    return opts;
+  }
+
+  async function validatePatches() {
+    if (state.phase !== 'ready' || !state.file) return;
+    const seq = ++state.seq; state.phase = 'validating'; updatePatchBtn();
+    try {
+      const buf = await state.file.arrayBuffer();
+      if (seq !== state.seq) return;
+      const opts = await buildOpts();
+      const res = await window.lkUnlock.validatePatch(buf, opts);
+      if (seq !== state.seq) return;
+      const planMap = {}; (res.plan || []).forEach(p => { if (p.type === 'json_patch') planMap[p.name] = p.status; });
+      state.jsonPatchSet.forEach(p => { if (planMap[p.name]) p.status = planMap[p.name]; else if (p.status !== 'invalid') p.status = 'error'; });
+      renderJsonTable();
+      state.els.jsonErrors.textContent = (res.errors || []).join('\n'); state.els.jsonErrors.hidden = !(res.errors || []).length;
+    } catch (e) {
+      if (seq === state.seq) { state.els.jsonErrors.textContent = e.message; state.els.jsonErrors.hidden = false; }
+    } finally { if (seq === state.seq) { state.phase = 'ready'; updatePatchBtn(); } }
+  }
+
+  async function startPatchJob() {
+    if (state.job || state.phase !== 'ready' || !state.file) return;
+    const jobId = ++state.seq; state.job = { id: jobId }; state.phase = 'patching'; updatePatchBtn();
+    const fileSnap = state.file;
+    try {
+      const buf = await fileSnap.arrayBuffer();
+      if (jobId !== state.seq) return;
+      const opts = await buildOpts();
+      const res = await window.lkUnlock.patchBuffer(buf, opts);
+      if (jobId !== state.seq) return;
+      renderReport(res); state.phase = res.ok ? 'done' : 'error';
+    } catch (e) {
+      if (jobId !== state.seq) return;
+      renderReport({ ok: false, errors: [e.message], warnings: [], report: [], sha256: '', img: null }); state.phase = 'error';
+    } finally { if (jobId === state.seq) { state.job = null; updatePatchBtn(); } }
+  }
+
+  function renderReport(res) {
+    state.report = res; state.els.reportDetails.hidden = false; state.els.reportDetails.open = true;
+    state.els.reportWarnings.textContent = (res.warnings || []).join('\n'); state.els.reportWarnings.hidden = !(res.warnings || []).length;
+    state.els.reportErrors.textContent = (res.errors || []).join('\n'); state.els.reportErrors.hidden = !(res.errors || []).length;
+    state.els.reportTbody.innerHTML = '';
+    (res.report || []).forEach(r => {
+      const tr = document.createElement('tr'); tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td>';
+      tr.children[0].textContent = t('lk.report.type.' + r.type) || r.type;
+      tr.children[1].textContent = r.offset != null ? '0x' + r.offset.toString(16) : '-';
+      tr.children[2].textContent = r.length != null ? String(r.length) : '-';
+      tr.children[3].textContent = t('lk.json.status.' + r.status) || r.status;
+      tr.children[4].textContent = r.message || '';
+      state.els.reportTbody.appendChild(tr);
+    });
+    state.els.reportSha.textContent = res.sha256 || '';
+    if (state.els.patchHash) state.els.patchHash.textContent = res.sha256 ? 'SHA-256: ' + res.sha256 : '';
+    if (state.objectUrl) { URL.revokeObjectURL(state.objectUrl); state.objectUrl = null; }
+    if (res.ok && res.img) {
+      const blob = new Blob([res.img], { type: 'application/octet-stream' });
+      state.objectUrl = URL.createObjectURL(blob);
+      if (state.els.dlImg) { state.els.dlImg.href = state.objectUrl; state.els.dlImg.download = res.output_name || 'lk_patched.img'; state.els.dlImg.hidden = false; state.els.dlImg.style.display = 'flex'; }
+    } else if (state.els.dlImg) { state.els.dlImg.hidden = true; state.els.dlImg.style.display = 'none'; }
+  }
+
+  function resetReportUI() {
+    state.els.reportDetails.hidden = true; state.els.reportWarnings.hidden = true; state.els.reportErrors.hidden = true;
+    state.els.reportTbody.innerHTML = ''; state.els.reportSha.textContent = '';
+    if (state.els.patchHash) state.els.patchHash.textContent = '';
+    if (state.els.dlImg) { state.els.dlImg.hidden = true; state.els.dlImg.style.display = 'none'; }
+  }
+
+  return { init, onFileChange, runDiagPatch, startPatchJob };
+})();
+lkPatchUi.init();
+
 
 /* ================= утилита сохранения ================= */
 function saveBlob(data,name){
@@ -993,7 +1333,9 @@ async function onFile(f){
   state.buf = buf;
   state.fileName = name;
   log(t('status.fileSelected',{name}));
+  lkPatchUi.onFileChange(f);
   runDiag(mySeq);
+  lkPatchUi.runDiagPatch(buf);
   sync();
 }
 
@@ -1064,7 +1406,8 @@ els.exportBtn.onclick=()=>busy(els.exportBtn,async()=>{
 });
 
 /* ================= действия ================= */
-els.patch.onclick=()=>busy(els.patch,async()=>{
+els.patch.onclick=()=>lkPatchUi.startPatchJob();
+if(false){ /* legacy patch flow kept for reference */ els.patch.onclick=()=>busy(els.patch,async()=>{
   log(t('status.patching'));
   const r=await window.lkUnlock.patchBuffer(state.buf.slice(0));
   state.pem=r.pem;
@@ -1076,7 +1419,8 @@ els.patch.onclick=()=>busy(els.patch,async()=>{
   setTimeout(()=>URL.revokeObjectURL(url),30000);
   showHash('#patchHash',r.sha256);
   log(t('status.patchDone',{hash:r.sha256.slice(0,16)}));
-});
+}); }
+
 els.sign.onclick=()=>busy(els.sign,async()=>{
   log(t('status.signing'));
   const r=await window.lkUnlock.signToken(els.token.value.trim());
@@ -1131,7 +1475,7 @@ function finishSplash(){
 
 function onReady(source){
   state.ready=true;
-  els.badge.classList.add('on');els.badgeText.textContent=t('status.pyodideReady');
+  if(els.badge){els.badge.classList.add('on');els.badgeText.textContent=t('status.pyodideReady');}
   setKeyStatus(source);
   log(t('status.coreReady',{key:source}));
   finishSplash();sync();

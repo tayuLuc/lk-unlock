@@ -99,6 +99,32 @@ async function handle(msg) {
       const r = JSON.parse(pw.diagnose_file(new Uint8Array(msg.buf)));
       return {type: "result", ...r};
     }
+    case "diagnose_image": {
+      await ensurePyodide();
+      const toJs = (x) => (x && typeof x.toJs === 'function')
+        ? x.toJs({dict_converter: Object.fromEntries}) : x;
+      const r = pw.diagnose_image(new Uint8Array(msg.buf));
+      return {type: "result", ...toJs(r)};
+    }
+    case "validate_patch": {
+      await ensurePyodide();
+      const toJs = (x) => (x && typeof x.toJs === 'function')
+        ? x.toJs({dict_converter: Object.fromEntries}) : x;
+      const opts = pyodide.toPy(msg.opts);
+      const r = pw.validate_patch_request(new Uint8Array(msg.buf), opts);
+      return {type: "result", ...toJs(r)};
+    }
+    case "patch_buffer": {
+      await ensurePyodide();
+      const opts = pyodide.toPy(msg.opts);
+      const r = pw.patch_buffer(new Uint8Array(msg.buf), opts);
+      const out = new Uint8Array(r.output_image);
+      const toJs = (x) => (x && typeof x.toJs === 'function')
+        ? x.toJs({dict_converter: Object.fromEntries}) : x;
+      return {type: "result", ok: r.ok, img: out.buffer, output_name: r.output_name,
+              sha256: r.sha256, report: toJs(r.report), warnings: toJs(r.warnings),
+              errors: toJs(r.errors)};
+    }
     case "parse_token": {
       await ensurePyodide();
       const r = JSON.parse(pw.parse_token(msg.token));
