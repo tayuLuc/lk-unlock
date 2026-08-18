@@ -218,9 +218,6 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
 .key-fingerprint-main{flex:1;min-width:0}
 .key-fingerprint-emoji{font:20px/1 var(--sans);margin-bottom:8px}
 .key-fingerprint-short{font:12px var(--mono);color:var(--muted);margin-bottom:8px;word-break:break-all}
-.key-fingerprint-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:3px;width:100px;flex-shrink:0}
-.key-fingerprint-grid div{aspect-ratio:1;border-radius:3px}
-
 /* ---------- адаптив / доступность ---------- */
 @media(max-width:880px){
   .grid{grid-template-columns:1fr}
@@ -318,7 +315,6 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
           <div class="key-fingerprint-emoji" id="keyFingerprintEmoji"></div>
           <div class="key-fingerprint-short" id="keyFingerprintShort"></div>
         </div>
-        <div class="key-fingerprint-grid" id="keyFingerprintGrid"></div>
       </div>
 
       <div class="row">
@@ -497,7 +493,6 @@ const els={
   keyFingerprint:$('#keyFingerprint'),
   keyFingerprintEmoji:$('#keyFingerprintEmoji'),
   keyFingerprintShort:$('#keyFingerprintShort'),
-  keyFingerprintGrid:$('#keyFingerprintGrid'),
 };
 els.keyDot = els.keyStatus.querySelector('.dot');
 
@@ -809,7 +804,6 @@ async function showKeyFingerprint(){
     els.keyFingerprint.style.display='block';
     els.keyFingerprintEmoji.textContent=f.emoji;
     els.keyFingerprintShort.textContent=f.short;
-    els.keyFingerprintGrid.innerHTML=f.grid.map(c=>`<div style="background:${c}"></div>`).join('');
   }catch(e){/* ключ может быть не готов — игнор */}
 }
 
