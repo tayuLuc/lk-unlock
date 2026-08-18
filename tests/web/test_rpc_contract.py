@@ -74,12 +74,8 @@ def test_rpc_contract(server):
         aliases = page.evaluate("window.__RPC_ALIASES")
         assert aliases, "RPC_ALIASES empty"
         for alias, target in aliases.items():
-            ok_target = page.evaluate(
-                f"typeof window.lkUnlock['{target}'] === 'function'"
-            )
-            ok_alias = page.evaluate(
-                f"window.lkUnlock['{alias}'] === window.lkUnlock['{target}']"
-            )
+            ok_target = page.evaluate(f"typeof window.lkUnlock['{target}'] === 'function'")
+            ok_alias = page.evaluate(f"window.lkUnlock['{alias}'] === window.lkUnlock['{target}']")
             assert ok_target, f"dead alias target: {target}"
             assert ok_alias, f"alias mismatch: {alias}"
 
