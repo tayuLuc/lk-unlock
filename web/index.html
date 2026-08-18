@@ -1868,14 +1868,17 @@ async function showKeyFingerprint(){
         // Race the ADB auth against a 20s timeout: if the user misses the
         // RSA prompt on the phone, fail instead of hanging forever.
         const authPromise=AdbDaemonTransport.authenticate({serial:device.serial, connection, credentialStore});
-        const timeout=new Promise((_,reject)=>setTimeout(()=>reject(new Error('AUTH_TIMEOUT')),20000));
-        transport=await Promise.race([authPromise,timeout]);
+        authPromise.catch(()=>{}); // late rejection after timeout must not become unhandled
+        let timer;
+        const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('AUTH_TIMEOUT')),20000)});
+        try{ transport=await Promise.race([authPromise,timeout]); }
+        finally{ clearTimeout(timer); }
       }catch(err){
         // Close the USB connection so the interface is released on auth
         // failure (otherwise it stays busy and reconnect errors out).
         // Note: AdbDaemonWebUsbConnection has no close() — closing the
         // writable triggers the duplex close handler (device.raw.close()).
-        try{ await connection.writable.close(); }catch(_){}
+        await safeCloseAdbConnection(connection);
         connection=null;
         transport=null;
         if(err.message==='AUTH_TIMEOUT') throw new Error(t('webusb.timeout'));
@@ -1927,9 +1930,14 @@ async function showKeyFingerprint(){
     }
   }
   // keepClean=false lets the caller show an error status afterwards.
+  async function safeCloseAdbConnection(connection){
+    if(!connection) return;
+    try{ await connection.writable.close(); }catch(e){ console.warn('ADB writable.close failed',e); }
+    try{ await connection.device?.raw?.close(); }catch(_){}
+  }
   async function disconnectDevice(keepClean){
     try{ transport&&await transport.close(); }catch(e){}
-    try{ connection&&await connection.writable.close(); }catch(e){}
+    await safeCloseAdbConnection(connection);
     transport=null; connection=null; adb=null;
     if(!keepClean) setStatus(t('webusb.disconnected'),'default');
   }
