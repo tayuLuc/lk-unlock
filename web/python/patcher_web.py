@@ -365,6 +365,93 @@ def diagnose_file(data) -> str:
 # ---------------------------------------------------------------------------
 # UX 1: Parse and validate the MediaTek TLV unlock token
 # ---------------------------------------------------------------------------
+def _token_payload(token_text: str) -> str:
+    if isinstance(token_text, bytes):
+        token_text = token_text.decode("utf-8", "ignore")
+
+    parts = []
+    for line in (token_text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        line = re.sub(r"^\(bootloader\)\s*", "", line, flags=re.I)
+        line = line.strip()
+
+        # Drop "OKAY" only as a standalone status line, not inside a token.
+        if re.fullmatch(r"OKAY", line, flags=re.I):
+            continue
+
+        line = re.sub(r"^token\s*:\s*", "", line, flags=re.I)
+        line = line.strip()
+
+        if line:
+            parts.append(line)
+
+    tok = "".join(parts)
+    tok = re.sub(r"\s+", "", tok)
+
+    if tok.lower().startswith("0x"):
+        tok = tok[2:]
+
+    return tok
+
+
+def _decode_token_bytes(tok: str) -> bytes:
+    if not tok:
+        raise ValueError("Пустой токен")
+
+    hex_candidate = None
+
+    if re.fullmatch(r"[0-9a-fA-F]+", tok) and len(tok) % 2 == 0:
+        try:
+            hex_candidate = bytes.fromhex(tok)
+        except ValueError as e:
+            raise ValueError(f"Невалидный HEX: {e}")
+
+        if hex_candidate and hex_candidate[0] == 0x55:
+            return hex_candidate
+
+    stripped = tok.rstrip("=")
+    existing_pad = len(tok) - len(stripped)
+
+    if existing_pad > 2:
+        raise ValueError("Невалидный Base64: некорректный padding")
+
+    if "=" in stripped:
+        raise ValueError("Невалидный Base64: '=' внутри данных")
+
+    if len(stripped) % 4 == 1:
+        raise ValueError("Невалидный Base64: некорректная длина")
+
+    need_pad = (4 - (len(stripped) % 4)) % 4
+
+    if existing_pad and existing_pad != need_pad:
+        raise ValueError("Невалидный Base64: некорректный padding")
+
+    if not re.fullmatch(r"[A-Za-z0-9+/]*", stripped):
+        if hex_candidate is not None:
+            return hex_candidate
+        raise ValueError("Невалидный Base64: некорректные символы")
+
+    padded = stripped + ("=" * need_pad)
+
+    try:
+        data = base64.b64decode(padded, validate=True)
+    except Exception as e:
+        if hex_candidate is not None:
+            return hex_candidate
+        raise ValueError(f"Невалидный Base64: {e}")
+
+    if data and data[0] == 0x55:
+        return data
+
+    if hex_candidate is not None:
+        return hex_candidate
+
+    return data
+
+
 def parse_token(token_text: str) -> str:
     """Parse the MediaTek unlock token (from `fastboot oem get_token`).
 
@@ -383,18 +470,23 @@ def parse_token(token_text: str) -> str:
         "prefix_ok": False,
         "raw_length": 0,
     }
-    cleaned = (token_text or "").strip().replace(" ", "")
-    if not cleaned:
-        result["error"] = "Пустой токен"
-        return json.dumps(result)
-    pad = 4 - (len(cleaned) % 4)
-    if pad != 4:
-        cleaned += "=" * pad
+
     try:
-        data = base64.b64decode(cleaned, validate=True)
-    except Exception as e:
-        result["error"] = f"Невалидный Base64: {e}"
+        tok = _token_payload(token_text)
+        if not tok:
+            result["error"] = "Пустой токен"
+            return json.dumps(result)
+
+        data = _decode_token_bytes(tok)
+
+    except ValueError as e:
+        result["error"] = str(e)
         return json.dumps(result)
+
+    except Exception as e:
+        result["error"] = f"Ошибка разбора токена: {e}"
+        return json.dumps(result)
+
     result["raw_length"] = len(data)
     if not data:
         result["error"] = "Токен пуст после декода"
@@ -641,20 +733,10 @@ def patch_file(path_in: str, use_wrap: bool = False) -> str:
 
 
 def normalize_token(text: str) -> bytes:
-    lines = []
-    for ln in text.strip().splitlines():
-        ln = re.sub(r"^\(bootloader\)\s*", "", ln.strip())
-        ln = re.sub(r"^OKAY\s*", "", ln)
-        if ln:
-            lines.append(ln)
-    tok = "".join(lines).strip()
-    if tok.lower().startswith("0x"):
-        tok = tok[2:]
-    if re.fullmatch(r"[0-9a-fA-F]+", tok) and len(tok) % 2 == 0:
-        return bytes.fromhex(tok)
+    tok = _token_payload(text)
     try:
-        return base64.b64decode(tok, validate=True)
-    except Exception:
+        return _decode_token_bytes(tok)
+    except ValueError:
         return tok.encode()
 
 

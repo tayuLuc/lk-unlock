@@ -145,15 +145,12 @@ textarea:focus{outline:none;border-color:var(--acc1);box-shadow:0 0 0 3px rgba(1
 /* ---------- token visualization (base64 <-> bytes) ---------- */
 #token-viz-status{margin:8px 0;font:12px var(--mono);color:var(--muted);min-height:16px}
 #token-viz{margin-top:12px;border:1px solid var(--border);border-radius:12px;padding:12px;background:rgba(0,0,0,.2)}
-.token-viz-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.token-viz-grid{display:grid;grid-template-columns:1fr;gap:12px}
 @media(max-width:900px){.token-viz-grid{grid-template-columns:1fr}}
 .pane{min-width:0}
 .pane h3{margin:0 0 8px;font:13px var(--sans);color:var(--text)}
-#b64-view,#hex-view{user-select:none;border:1px solid var(--border);border-radius:8px;padding:8px;overflow:visible;background:rgba(0,0,0,.35)}
-.mono,#b64-view,#hex-view{font-family:var(--mono);font-size:12px;line-height:1.5}
-.b64-line{white-space:pre}
-.b64-char{border-radius:2px;transition:background-color 120ms ease,box-shadow 120ms ease}
-.b64-pad{color:#565b6d}
+#hex-view{user-select:none;border:1px solid var(--border);border-radius:8px;padding:8px;overflow:auto;background:rgba(0,0,0,.35)}
+.mono,#hex-view{font-family:var(--mono);font-size:12px;line-height:1.5}
 .hex-row{display:flex;gap:14px;white-space:pre}
 .hex-offset{color:#565b6d}
 .hex-bytes,.hex-ascii{display:grid}
@@ -369,10 +366,6 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
     <div class="c-head"><h2 style="margin:0;font-size:15px" data-i18n="visualization.title">Визуализация токена</h2></div>
     <div id="token-viz-status" role="status" aria-live="polite"></div>
     <div class="token-viz-grid">
-      <div class="pane">
-        <h3>Base64</h3>
-        <div id="b64-view" class="mono interactive" tabindex="0" data-i18n-attr="aria-label:token.base64View" aria-label="Base64 представление токена"></div>
-      </div>
       <div class="pane">
         <h3>Bytes</h3>
         <div id="hex-view" class="mono interactive" tabindex="0" data-i18n-attr="aria-label:token.bytesView" aria-label="Байтовое представление токена"></div>
@@ -1158,207 +1151,300 @@ async function showKeyFingerprint(){
 
 /* ================= токен: маппинг base64 <-> bytes ================= */
 (() => {
+  const MAX_HEX_BYTES = 10000;
   const MAX_B64 = 20000;
   const tokenEl = document.querySelector('#token');
   const vizEl = document.querySelector('#tokenVizCard');
   const statusEl = document.querySelector('#token-viz-status');
-  const b64El = document.querySelector('#b64-view');
   const hexEl = document.querySelector('#hex-view');
-  if(!tokenEl||!vizEl||!statusEl||!b64El||!hexEl) return;
+  if (!tokenEl || !vizEl || !statusEl || !hexEl) return;
 
-  const st = { norm:'', dataChars:0, bytes:new Uint8Array(0), segments:[], hover:null, pinned:null, drag:null };
-  const dom = { b64Chars:[], hexBytes:[], hexAscii:[] };
-  const lastPaint = new Map();
+  const B64_LOOKUP = new Uint8Array(256).fill(64);
+  const B64_ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  for (let i = 0; i < B64_ALPHA.length; i++) B64_LOOKUP[B64_ALPHA.charCodeAt(i)] = i;
+
+  let bytes = new Uint8Array(0);
+  let segments = [];
+  let hoverRange = null;
+  let pinnedRange = null;
+  let dragAnchor = null;
   let seq = 0;
-  const LOOKUP = new Uint8Array(256).fill(64);
-  const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-  for(let i=0;i<ALPHA.length;i++) LOOKUP[ALPHA.charCodeAt(i)] = i;
-  const ceilDiv=(a,b)=>Math.floor((a+b-1)/b);
+  let debounceTimer = null;
+  const domRefs = new Map();
 
-  function normalize(raw){
-    const norm = raw.replace(/\s+/g,'');
-    if(norm.length>MAX_B64) throw new Error(t('token.tooLong'));
-    if(!norm) return {norm:'',dataChars:0};
-    const m = norm.match(/=+$/);
-    const pad = m?m[0].length:0;
-    if(pad>2) throw new Error(t('token.invalidPadding'));
-    const data = pad?norm.slice(0,-pad):norm;
-    if(data.includes('=')) throw new Error(t('token.paddingInsideData'));
-    if(!/^[A-Za-z0-9+/]*$/.test(data)) throw new Error(t('token.invalidBase64Chars'));
-    if(data.length%4===1) throw new Error(t('token.invalidBase64Length'));
-    if(pad&&(data.length+pad)%4!==0) throw new Error(t('token.invalidPadding'));
-    return {norm, dataChars:data.length};
-  }
-  function decode(data){
-    const out = new Uint8Array(Math.floor(data.length*3/4));
-    let bits=0,bc=0,pos=0;
-    for(let i=0;i<data.length;i++){
-      const v = LOOKUP[data.charCodeAt(i)];
-      if(v===64) throw new Error(t('token.invalidBase64Char'));
-      bits=(bits<<6)|v; bc+=6;
-      if(bc>=8){bc-=8;out[pos++]=(bits>>bc)&0xff;}
+  function tokenToBytes(raw) {
+    const lines = String(raw).split('\n')
+      .map(ln => ln.replace(/^\(bootloader\)\s*/, '')
+                   .replace(/^OKAY\s*/, '')
+                   .replace(/^token:\s*/, '')
+                   .trim())
+      .filter(Boolean);
+    let tok = lines.join('').replace(/\s+/g, '');
+    if (tok.toLowerCase().startsWith('0x')) tok = tok.slice(2);
+
+    if (/^[0-9a-fA-F]+$/.test(tok) && tok.length % 2 === 0) {
+      if (tok.length / 2 > MAX_HEX_BYTES) throw new Error(t('token.tooLong'));
+      const out = new Uint8Array(tok.length / 2);
+      for (let i = 0; i < out.length; i++) out[i] = parseInt(tok.substr(i * 2, 2), 16);
+      return out;
+    }
+
+    if (tok.length > MAX_B64) throw new Error(t('token.tooLong'));
+    if (!tok) return new Uint8Array(0);
+
+    const m = tok.match(/=+$/);
+    const pad = m ? m[0].length : 0;
+    if (pad > 2) throw new Error(t('token.invalidPadding'));
+    const data = pad ? tok.slice(0, -pad) : tok;
+    if (data.includes('=')) throw new Error(t('token.paddingInsideData'));
+    if (!/^[A-Za-z0-9+/]*$/.test(data)) throw new Error(t('token.invalidBase64Chars'));
+    if (data.length % 4 === 1) throw new Error(t('token.invalidBase64Length'));
+    if (pad && (data.length + pad) % 4 !== 0) throw new Error(t('token.invalidPadding'));
+
+    const out = new Uint8Array(Math.floor(data.length * 3 / 4));
+    let bits = 0, bc = 0, pos = 0;
+    for (let i = 0; i < data.length; i++) {
+      const v = B64_LOOKUP[data.charCodeAt(i)];
+      if (v === 64) throw new Error(t('token.invalidBase64Char'));
+      bits = (bits << 6) | v;
+      bc += 6;
+      if (bc >= 8) {
+        bc -= 8;
+        out[pos++] = (bits >> bc) & 0xff;
+      }
     }
     return out;
   }
-  function b64ToBytes([s,e]){
-    const dc=st.dataChars, bl=st.bytes.length;
-    s=Math.max(0,Math.min(s,dc)); e=Math.max(0,Math.min(e,dc));
-    if(e<=s||bl===0) return null;
-    const start=Math.floor(s*3/4), end=Math.min(bl,ceilDiv(e*3,4));
-    return end>start?[start,end]:null;
-  }
-  function bytesToB64([s,e]){
-    const bl=st.bytes.length, dc=st.dataChars;
-    s=Math.max(0,Math.min(s,bl)); e=Math.max(0,Math.min(e,bl));
-    if(e<=s||dc===0) return null;
-    const start=Math.floor(s*4/3), end=Math.min(dc,ceilDiv(e*4,3));
-    return end>start?[start,end]:null;
-  }
-  const mkB64=(s,e)=>{if(e<s)[s,e]=[e,s];const b64=[s,e];return{source:'b64',b64,bytes:b64ToBytes(b64)};};
-  const mkBytes=(s,e)=>{if(e<s)[s,e]=[e,s];const bytes=[s,e];return{source:'bytes',bytes,b64:bytesToB64(bytes)};};
 
-  function renderBase64(){
-    b64El.replaceChildren(); dom.b64Chars=[];
-    const frag=document.createDocumentFragment();
-    for(let start=0;start<st.norm.length;start+=64){
-      const line=document.createElement('div'); line.className='b64-line';
-      for(let i=start;i<Math.min(start+64,st.norm.length);i++){
-        const sp=document.createElement('span'); sp.className='b64-char'; sp.dataset.b64Index=String(i);
-        sp.textContent=st.norm[i];
-        if(i>=st.dataChars) sp.classList.add('b64-pad');
-        dom.b64Chars[i]=sp; line.appendChild(sp);
+  function findDeviceName(haystack, needle) {
+    if (!needle.length || haystack.length < needle.length) return -1;
+    outer: for (let i = 0; i <= haystack.length - needle.length; i++) {
+      for (let j = 0; j < needle.length; j++) {
+        if (haystack[i + j] !== needle[j]) continue outer;
       }
-      frag.appendChild(line);
-    }
-    b64El.appendChild(frag);
-  }
-  function renderHex(){
-    hexEl.replaceChildren(); dom.hexBytes=[]; dom.hexAscii=[];
-    const frag=document.createDocumentFragment();
-    for(let off=0;off<st.bytes.length;off+=16){
-      const row=document.createElement('div'); row.className='hex-row';
-      const offEl=document.createElement('span'); offEl.className='hex-offset'; offEl.textContent=off.toString(16).padStart(8,'0');
-      const hex=document.createElement('span'); hex.className='hex-bytes';
-      const ascii=document.createElement('span'); ascii.className='hex-ascii';
-      for(let i=0;i<16;i++){
-        const idx=off+i;
-        const hc=document.createElement('span'); hc.className='hex-byte';
-        const ac=document.createElement('span'); ac.className='hex-char';
-        if(idx<st.bytes.length){
-          const b=st.bytes[idx];
-          hc.dataset.byteIndex=String(idx); ac.dataset.byteIndex=String(idx);
-          hc.textContent=b.toString(16).padStart(2,'0');
-          ac.textContent=(b>=0x20&&b<=0x7e)?String.fromCharCode(b):'.';
-          dom.hexBytes[idx]=hc; dom.hexAscii[idx]=ac;
-        }else{ hc.classList.add('hex-empty'); ac.classList.add('hex-empty'); hc.textContent='  '; ac.textContent=' '; }
-        hex.appendChild(hc); ascii.appendChild(ac);
-      }
-      row.append(offEl,hex,ascii); frag.appendChild(row);
-    }
-    hexEl.appendChild(frag);
-  }
-
-  function indexOfBytes(hay,ndl){
-    if(!ndl.length||hay.length<ndl.length) return -1;
-    outer: for(let i=0;i<=hay.length-ndl.length;i++){
-      for(let j=0;j<ndl.length;j++) if(hay[i+j]!==ndl[j]) continue outer;
       return i;
     }
     return -1;
   }
-  function buildSegments(res){
-    const segs=[];
-    if(st.bytes.length&&st.bytes[0]===0x55) segs.push({byteStart:0,byteEnd:1,cls:'seg-prefix'});
-    const name=res&&res.device_name;
-    if(name&&typeof name==='string'){
-      const ndl=new TextEncoder().encode(name);
-      let off = Number.isInteger(res.device_name_offset)?res.device_name_offset:indexOfBytes(st.bytes,ndl);
-      if(off>=0&&off+ndl.length<=st.bytes.length) segs.push({byteStart:off,byteEnd:off+ndl.length,cls:'seg-device'});
+
+  function buildSegments(parseResult) {
+    const segs = [];
+    if (bytes.length && bytes[0] === 0x55) segs.push({ start: 0, end: 1, cls: 'seg-prefix' });
+    const name = parseResult && parseResult.device_name;
+    if (name && typeof name === 'string') {
+      const needle = new TextEncoder().encode(name);
+      const offset = Number.isInteger(parseResult.device_name_offset)
+        ? parseResult.device_name_offset
+        : findDeviceName(bytes, needle);
+      if (offset >= 0 && offset + needle.length <= bytes.length) {
+        segs.push({ start: offset, end: offset + needle.length, cls: 'seg-device' });
+      }
     }
     return segs;
   }
-  function applySegments(){
-    for(const seg of st.segments){
-      for(let i=seg.byteStart;i<seg.byteEnd&&i<dom.hexBytes.length;i++){
-        dom.hexBytes[i]?.classList.add(seg.cls); dom.hexAscii[i]?.classList.add(seg.cls);
+
+  function createHexByte(index, value) {
+    const el = document.createElement('span');
+    el.className = 'hex-byte';
+    el.dataset.byteIndex = String(index);
+    el.textContent = value.toString(16).padStart(2, '0');
+    return el;
+  }
+
+  function createHexChar(index, value) {
+    const el = document.createElement('span');
+    el.className = 'hex-char';
+    el.dataset.byteIndex = String(index);
+    el.textContent = (value >= 0x20 && value <= 0x7e) ? String.fromCharCode(value) : '.';
+    return el;
+  }
+
+  function createHexRow(offset) {
+    const row = document.createElement('div');
+    row.className = 'hex-row';
+    const offsetEl = document.createElement('span');
+    offsetEl.className = 'hex-offset';
+    offsetEl.textContent = offset.toString(16).padStart(8, '0');
+    const hexContainer = document.createElement('span');
+    hexContainer.className = 'hex-bytes';
+    const asciiContainer = document.createElement('span');
+    asciiContainer.className = 'hex-ascii';
+    for (let i = 0; i < 16; i++) {
+      const idx = offset + i;
+      if (idx < bytes.length) {
+        const b = bytes[idx];
+        const hexByte = createHexByte(idx, b);
+        const asciiChar = createHexChar(idx, b);
+        domRefs.set('hex-' + idx, hexByte);
+        domRefs.set('ascii-' + idx, asciiChar);
+        hexContainer.appendChild(hexByte);
+        asciiContainer.appendChild(asciiChar);
+      } else {
+        const hexEmpty = document.createElement('span');
+        hexEmpty.className = 'hex-byte hex-empty';
+        hexEmpty.textContent = '  ';
+        const asciiEmpty = document.createElement('span');
+        asciiEmpty.className = 'hex-char hex-empty';
+        asciiEmpty.textContent = ' ';
+        hexContainer.appendChild(hexEmpty);
+        asciiContainer.appendChild(asciiEmpty);
       }
-      const b64=bytesToB64([seg.byteStart,seg.byteEnd]);
-      if(b64) for(let i=b64[0];i<b64[1]&&i<dom.b64Chars.length;i++) dom.b64Chars[i]?.classList.add(seg.cls);
+    }
+    row.append(offsetEl, hexContainer, asciiContainer);
+    return row;
+  }
+
+  function renderHex() {
+    hexEl.replaceChildren();
+    domRefs.clear();
+    const frag = document.createDocumentFragment();
+    for (let offset = 0; offset < bytes.length; offset += 16) frag.appendChild(createHexRow(offset));
+    hexEl.appendChild(frag);
+  }
+
+  function applySegments() {
+    for (const seg of segments) {
+      for (let i = seg.start; i < seg.end; i++) {
+        domRefs.get('hex-' + i)?.classList.add(seg.cls);
+        domRefs.get('ascii-' + i)?.classList.add(seg.cls);
+      }
     }
   }
-  function clearCls(cls){
-    const p=lastPaint.get(cls); if(!p) return;
-    if(p.b64) for(let i=p.b64[0];i<p.b64[1];i++) dom.b64Chars[i]?.classList.remove(cls);
-    if(p.bytes) for(let i=p.bytes[0];i<p.bytes[1];i++){dom.hexBytes[i]?.classList.remove(cls);dom.hexAscii[i]?.classList.remove(cls);}
-    lastPaint.delete(cls);
-  }
-  function drawSel(sel,cls){
-    if(sel.b64) for(let i=sel.b64[0];i<sel.b64[1];i++) dom.b64Chars[i]?.classList.add(cls);
-    if(sel.bytes) for(let i=sel.bytes[0];i<sel.bytes[1];i++){dom.hexBytes[i]?.classList.add(cls);dom.hexAscii[i]?.classList.add(cls);}
-    lastPaint.set(cls,{b64:sel.b64,bytes:sel.bytes});
-  }
-  function paint(){
-    clearCls('hl-hover'); clearCls('hl-pinned');
-    if(st.hover) drawSel(st.hover,'hl-hover');
-    if(st.pinned) drawSel(st.pinned,'hl-pinned');
-    const sel=st.pinned||st.hover;
-    if(sel&&sel.bytes){
-      const[s,e]=sel.bytes; const pn=Math.min(16,e-s);
-      const hex=Array.from(st.bytes.slice(s,s+pn)).map(b=>b.toString(16).padStart(2,'0')).join(' ');
-      const ascii=Array.from(st.bytes.slice(s,s+pn)).map(b=>(b>=0x20&&b<=0x7e)?String.fromCharCode(b):'.').join('');
-      statusEl.textContent=t('status.bytesRange',{from:s,to:e-1,hex,note:e-s>pn?'…':'',ascii});
-    } else statusEl.textContent='';
-  }
-  function clearInt(){st.hover=null;st.pinned=null;st.drag=null;lastPaint.clear();}
 
-  function bindPane(el,source){
-    const isB64=source==='b64';
-    const attr=isB64?'b64-index':'byte-index';
-    const key=isB64?'b64Index':'byteIndex';
-    const mk=(s,e)=>isB64?mkB64(s,e):mkBytes(s,e);
-    el.addEventListener('mousedown',e=>{
-      const t=e.target.closest(`[data-${attr}]`); if(!t) return;
-      e.preventDefault();
-      const i=Number(t.dataset[key]);
-      st.drag={source,anchor:i}; st.pinned=mk(i,i+1); st.hover=null; paint();
-    });
-    el.addEventListener('mouseover',e=>{
-      const t=e.target.closest(`[data-${attr}]`); if(!t) return;
-      const i=Number(t.dataset[key]);
-      if(st.drag&&st.drag.source===source){const a=st.drag.anchor;st.pinned=mk(Math.min(a,i),Math.max(a,i)+1);st.hover=null;}
-      else st.hover=mk(i,i+1);
+  function clearHighlights(start, end) {
+    for (let i = start; i < end; i++) {
+      domRefs.get('hex-' + i)?.classList.remove('hl-hover', 'hl-pinned');
+      domRefs.get('ascii-' + i)?.classList.remove('hl-hover', 'hl-pinned');
+    }
+  }
+
+  function applyHighlight(start, end, cls) {
+    for (let i = start; i < end; i++) {
+      domRefs.get('hex-' + i)?.classList.add(cls);
+      domRefs.get('ascii-' + i)?.classList.add(cls);
+    }
+  }
+
+  function updateStatus() {
+    const range = pinnedRange || hoverRange;
+    if (range) {
+      const [start, end] = range;
+      const previewLen = Math.min(16, end - start);
+      const hex = Array.from(bytes.slice(start, start + previewLen))
+        .map(b => b.toString(16).padStart(2, '0')).join(' ');
+      const ascii = Array.from(bytes.slice(start, start + previewLen))
+        .map(b => (b >= 0x20 && b <= 0x7e) ? String.fromCharCode(b) : '.').join('');
+      const note = (end - start) > previewLen ? '…' : '';
+      statusEl.textContent = t('status.bytesRange', { from: start, to: end - 1, hex, note, ascii });
+    } else {
+      statusEl.textContent = '';
+    }
+  }
+
+  function paint() {
+    if (hoverRange) clearHighlights(hoverRange[0], hoverRange[1]);
+    if (pinnedRange) clearHighlights(pinnedRange[0], pinnedRange[1]);
+    if (pinnedRange) applyHighlight(pinnedRange[0], pinnedRange[1], 'hl-pinned');
+    if (hoverRange) applyHighlight(hoverRange[0], hoverRange[1], 'hl-hover');
+    updateStatus();
+  }
+
+  function clearInteraction() {
+    hoverRange = null;
+    pinnedRange = null;
+    dragAnchor = null;
+  }
+
+  function handleMouseDown(e) {
+    const target = e.target.closest('[data-byte-index]');
+    if (!target) return;
+    e.preventDefault();
+    const idx = Number(target.dataset.byteIndex);
+    dragAnchor = idx;
+    pinnedRange = [idx, idx + 1];
+    hoverRange = null;
+    paint();
+  }
+
+  function handleMouseOver(e) {
+    const target = e.target.closest('[data-byte-index]');
+    if (!target) return;
+    const idx = Number(target.dataset.byteIndex);
+    if (dragAnchor !== null) {
+      pinnedRange = [Math.min(dragAnchor, idx), Math.max(dragAnchor, idx) + 1];
+      hoverRange = null;
+    } else {
+      hoverRange = [idx, idx + 1];
+    }
+    paint();
+  }
+
+  function handleMouseLeave() {
+    if (dragAnchor === null) {
+      hoverRange = null;
       paint();
-    });
-    el.addEventListener('mouseleave',()=>{if(!st.drag){st.hover=null;paint();}});
-  }
-  bindPane(b64El,'b64'); bindPane(hexEl,'bytes');
-  window.addEventListener('mouseup',()=>{st.drag=null;});
-  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&st.pinned){st.pinned=null;paint();}});
-
-  async function updateViz(){
-    const id=++seq;
-    const raw=tokenEl.value??'';
-    try{
-      const {norm,dataChars}=normalize(raw);
-      const bytes=decode(norm.slice(0,dataChars));
-      if(id!==seq) return;
-      st.norm=norm; st.dataChars=dataChars; st.bytes=bytes; st.segments=[];
-      clearInt(); renderBase64(); renderHex(); applySegments(); paint();
-      vizEl.style.display = bytes.length===0 ? 'none' : 'block'; statusEl.textContent='';
-      if(!bytes.length) return;
-      const res=await window.lkUnlock.parseToken(norm);
-      if(id!==seq) return;
-      st.segments=buildSegments(res);
-      clearInt(); renderBase64(); renderHex(); applySegments(); paint();
-    }catch(err){
-      if(id!==seq) return;
-      st.norm='';st.dataChars=0;st.bytes=new Uint8Array(0);st.segments=[];
-      clearInt(); renderBase64(); renderHex(); paint();
-      vizEl.style.display='none'; statusEl.textContent=t('visualization.msg',{msg:err.message});
     }
   }
-  let tmr;
-  tokenEl.addEventListener('input',()=>{clearTimeout(tmr);tmr=setTimeout(updateViz,150);});
+
+  function handleMouseUp() {
+    dragAnchor = null;
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === 'Escape' && pinnedRange) {
+      pinnedRange = null;
+      paint();
+    }
+  }
+
+  async function updateViz() {
+    const id = ++seq;
+    const raw = tokenEl.value ?? '';
+    try {
+      bytes = tokenToBytes(raw);
+      if (id !== seq) return;
+
+      segments = [];
+      clearInteraction();
+      renderHex();
+      applySegments();
+      paint();
+
+      vizEl.style.display = bytes.length === 0 ? 'none' : 'block';
+      statusEl.textContent = '';
+      if (!bytes.length) return;
+
+      const parseResult = await window.lkUnlock.parseToken(raw);
+      if (id !== seq) return;
+
+      segments = buildSegments(parseResult);
+      clearInteraction();
+      renderHex();
+      applySegments();
+      paint();
+    } catch (err) {
+      if (id !== seq) return;
+      bytes = new Uint8Array(0);
+      segments = [];
+      clearInteraction();
+      renderHex();
+      paint();
+      vizEl.style.display = 'none';
+      statusEl.textContent = t('visualization.msg', { msg: err.message });
+    }
+  }
+
+  function debouncedUpdate() {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(updateViz, 150);
+  }
+
+  hexEl.addEventListener('mousedown', handleMouseDown);
+  hexEl.addEventListener('mouseover', handleMouseOver);
+  hexEl.addEventListener('mouseleave', handleMouseLeave);
+  window.addEventListener('mouseup', handleMouseUp);
+  document.addEventListener('keydown', handleKeyDown);
+  tokenEl.addEventListener('input', debouncedUpdate);
 })();
 
 /* ================= WebUSB ADB: read-only getprop ================= */
