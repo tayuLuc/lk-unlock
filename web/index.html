@@ -2012,8 +2012,17 @@ async function showKeyFingerprint(){
     const device=await navigator.usb.requestDevice({filters:[{classCode:255,subclassCode:66,protocolCode:1}]});
     if(!device) return null;
     await device.open();
-    // Iterate configurations/interfaces/alternates exactly like
-    // webadb.com: find the ALTERNATE whose class matches the ADB interface.
+    // Full descriptor dump for diagnostics.
+    for(const cfg of device.configurations||[]){
+      log(`Config ${cfg.configurationValue}: ${cfg.interfaces.length} interface(s)`);
+      for(const ifc of cfg.interfaces){
+        log(`  iface #${ifc.interfaceNumber} claimed=${ifc.claimed} activeAlt=${ifc.alternate?.alternateSetting}`);
+        for(const a of ifc.alternates){
+          const eps=a.endpoints.map(e=>`${e.direction}:${e.endpointNumber}/${e.type}`).join(' ');
+          log(`    alt ${a.alternateSetting} class=${a.interfaceClass}/${a.interfaceSubclass}/${a.interfaceProtocol} eps[${eps}]`);
+        }
+      }
+    }
     let chosen=null;
     for(const config of device.configurations||[]){
       if(chosen) break;
@@ -2036,9 +2045,9 @@ async function showKeyFingerprint(){
       if(msg.includes('claim')||msg.includes('in use')) throw new Error('USB_BLOCKED');
       throw claimErr;
     }
-    if(iface.alternate.alternateSetting!==alt.alternateSetting)
-      await device.selectAlternateInterface(iface.interfaceNumber,alt.alternateSetting);
-    // Pick endpoints from the MATCHING alternate, in declared order.
+    // Always re-select the alternate (even alt 0): some devices only
+    // activate the bulk endpoints after an explicit selectAlternate.
+    await device.selectAlternateInterface(iface.interfaceNumber, alt.alternateSetting);
     let inEp=null, outEp=null;
     for(const ep of alt.endpoints){
       if(ep.direction==='in'&&!inEp) inEp=ep;
@@ -2046,14 +2055,38 @@ async function showKeyFingerprint(){
       if(inEp&&outEp) break;
     }
     if(!inEp||!outEp) throw new Error('ADB endpoints not found (in='+(inEp?.endpointNumber||'-')+' out='+(outEp?.endpointNumber||'-')+')');
-    log('Interface #'+iface.interfaceNumber+' alt '+alt.alternateSetting+': IN ep '+inEp.endpointNumber+' ('+inEp.type+') OUT ep '+outEp.endpointNumber+' ('+outEp.type+')');
-    // Start the IN read BEFORE sending CNXN — webadb.com does this: their
-    // pipeTo() begins pulling the endpoint before the Connect is written.
-    // Some MTK/HyperOS builds only accept the handshake with a pending read.
-    const firstPacketPromise=readPacket(device,inEp.endpointNumber);
-    await sendPacket(device,outEp.endpointNumber,ADB.CMD_CNXN,ADB.VERSION,ADB.MAX_PAYLOAD,
-      new TextEncoder().encode('host::features='+CNXN_FEATURES+';'));
-    await authenticate(device,inEp.endpointNumber,outEp.endpointNumber,await firstPacketPromise);
+    log('Chosen: iface #'+iface.interfaceNumber+' alt '+alt.alternateSetting+' → IN ep '+inEp.endpointNumber+' ('+inEp.type+') OUT ep '+outEp.endpointNumber+' ('+outEp.type+')');
+    // Send CNXN, log the actual transferOut result.
+    const cnxnPayload=new TextEncoder().encode('host::features='+CNXN_FEATURES+';');
+    const h=new ArrayBuffer(24), v=new DataView(h);
+    v.setUint32(0,ADB.CMD_CNXN,true); v.setUint32(4,ADB.VERSION,true); v.setUint32(8,ADB.MAX_PAYLOAD,true);
+    v.setUint32(12,cnxnPayload.length,true); v.setUint32(16,calculateChecksum(cnxnPayload),true); v.setUint32(20,ADB.CMD_CNXN^0xffffffff,true);
+    const cnxnPacket=new Uint8Array(24+cnxnPayload.length); cnxnPacket.set(new Uint8Array(h),0); cnxnPacket.set(cnxnPayload,24);
+    logPkt('OUT',ADB.CMD_CNXN,ADB.VERSION,ADB.MAX_PAYLOAD,cnxnPayload.length);
+    const outRes=await device.transferOut(outEp.endpointNumber,cnxnPacket);
+    log('CNXN transferOut: status='+outRes.status+' bytes='+outRes.bytesWritten);
+    // Read the first packet with full error detail.
+    let firstPacket;
+    try{
+      usbReadBuf=new Uint8Array(0);
+      firstPacket=await readPacket(device,inEp.endpointNumber);
+    }catch(readErr){
+      log('First read failed: '+readErr.message);
+      // Retry once after a device reset (clears a stalled endpoint).
+      try{ await device.reset(); }catch(_){}
+      try{
+        if(!iface.claimed) await device.claimInterface(iface.interfaceNumber);
+        await device.selectAlternateInterface(iface.interfaceNumber, alt.alternateSetting);
+        usbReadBuf=new Uint8Array(0);
+        const outRes2=await device.transferOut(outEp.endpointNumber,cnxnPacket);
+        log('CNXN transferOut(2): status='+outRes2.status+' bytes='+outRes2.bytesWritten);
+        firstPacket=await readPacket(device,inEp.endpointNumber);
+      }catch(e2){
+        log('Second read failed: '+e2.message);
+        throw new Error('USB handshake failed: '+readErr.message+' / '+e2.message);
+      }
+    }
+    await authenticate(device,inEp.endpointNumber,outEp.endpointNumber,firstPacket);
     return {connection:new AdbConnection(new AdbDaemon(device,inEp.endpointNumber,outEp.endpointNumber)), name:device.productName||device.serialNumber||'Android', raw:device};
   }
   $('#btnPkts').onclick=()=>{
