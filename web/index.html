@@ -1846,12 +1846,9 @@ async function showKeyFingerprint(){
       const manager=Manager.BROWSER;
       if(!manager){ setStatus(t('webusb.unavailable'),'error'); return; }
       setStatus(t('webusb.chooseDevice'),'loading');
-      // Auto-attach only in automation or explicit test bench (?autousb=1 or
-      // WebDriver, e.g. WebUsbAllowDevicesForUrls policy — no chooser, no
-      // gesture). Everyone else always gets the native chooser.
-      let device = (navigator.webdriver || new URLSearchParams(location.search).has('autousb'))
-        ? (await manager.getDevices())[0] : undefined;
-      if(!device) device = await manager.requestDevice();
+      // Always use the native chooser so the user picks the exact device
+      // (no auto-attach / getDevices branching).
+      const device = await manager.requestDevice();
       if(!device){ setStatus(t('webusb.deviceNotSelected'),'error'); return; }
       setStatus(t('webusb.connectingTo',{name:device.name}),'loading');
       try{
