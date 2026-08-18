@@ -2000,7 +2000,13 @@ class UsbTransport {
         if (this.closed) throw new Error('Transport closed');
         const withTimeout = p => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('USB read timeout')), timeoutMs))]);
         while (this.buf.length < count) {
-            const res = await withTimeout(this.device.transferIn(this.inEp, 16384));
+            // `stall` is transient (endpoint not yet ready, e.g. right after
+            // claim); retry the read instead of failing, like webadb does.
+            let res;
+            for (let attempt = 0; ; attempt++) {
+                res = await withTimeout(this.device.transferIn(this.inEp, 16384));
+                if (res.status === 'ok' || res.status !== 'stall' || attempt >= 3) break;
+            }
             if (res.status !== 'ok') throw new Error('USB transfer error (status ' + res.status + ')');
             const chunk = new Uint8Array(res.data.buffer, res.data.byteOffset, res.data.byteLength);
             const merged = new Uint8Array(this.buf.length + chunk.length);
@@ -2267,9 +2273,12 @@ async function connectWs(url) {
       if(msg.includes('claim')||msg.includes('in use')) throw new Error('USB_BLOCKED');
       throw claimErr;
     }
-    // Always re-select the alternate (even alt 0): some devices only
-    // activate the bulk endpoints after an explicit selectAlternate.
-    await device.selectAlternateInterface(iface.interfaceNumber, alt.alternateSetting);
+    // Re-select the alternate ONLY if it differs from the active one.
+    // An unconditional selectAlternateInterface (even for alt 0) can reset
+    // the bulk endpoints on some devices (MIUI), making the first transferIn
+    // stall. Match webadb's conditional behavior.
+    if(iface.alternate?.alternateSetting!==alt.alternateSetting)
+      await device.selectAlternateInterface(iface.interfaceNumber, alt.alternateSetting);
     let inEp=null, outEp=null;
     for(const ep of alt.endpoints){
       if(ep.direction==='in'&&!inEp) inEp=ep;
@@ -2289,13 +2298,10 @@ async function connectWs(url) {
       firstPacket=await readPacket(transport);
     }catch(readErr){
       log('First read failed: '+readErr.message);
-      // Retry once after a device reset (clears a stalled endpoint).
-      try{ await device.reset(); }catch(_){}
+      // Retry the read once WITHOUT device.reset() — reset drops the USB
+      // connection on MIUI (subsequent claim fails with 'device was
+      // disconnected'). A stalled endpoint clears on a second transferIn.
       try{
-        if(!iface.claimed) await device.claimInterface(iface.interfaceNumber);
-        await device.selectAlternateInterface(iface.interfaceNumber, alt.alternateSetting);
-        const outRes2=await sendPacket(transport, ADB.CMD_CNXN, ADB.VERSION, ADB.MAX_PAYLOAD, cnxnPayload);
-        log('CNXN transferOut(2): status='+outRes2.status+' bytes='+outRes2.bytesWritten);
         firstPacket=await readPacket(transport);
       }catch(e2){
         log('Second read failed: '+e2.message);

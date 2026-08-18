@@ -167,7 +167,13 @@ class UsbTransport {
         if (this.closed) throw new Error('Transport closed');
         const withTimeout = p => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('USB read timeout')), timeoutMs))]);
         while (this.buf.length < count) {
-            const res = await withTimeout(this.device.transferIn(this.inEp, 16384));
+            // `stall` is transient (endpoint not yet ready, e.g. right after
+            // claim); retry the read instead of failing, like webadb does.
+            let res;
+            for (let attempt = 0; ; attempt++) {
+                res = await withTimeout(this.device.transferIn(this.inEp, 16384));
+                if (res.status === 'ok' || res.status !== 'stall' || attempt >= 3) break;
+            }
             if (res.status !== 'ok') throw new Error('USB transfer error (status ' + res.status + ')');
             const chunk = new Uint8Array(res.data.buffer, res.data.byteOffset, res.data.byteLength);
             const merged = new Uint8Array(this.buf.length + chunk.length);
