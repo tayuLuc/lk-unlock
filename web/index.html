@@ -1406,9 +1406,11 @@ async function showKeyFingerprint(){
       const manager=Manager.BROWSER;
       if(!manager){ setStatus(t('webusb.unavailable'),'error'); return; }
       setStatus(t('webusb.chooseDevice'),'loading');
-      // Always use the native chooser so the user picks the exact device
-      // (getDevices()[0] could blindly attach to an old/unplugged one).
-      const device = await manager.requestDevice();
+      // Auto-attach to an already-authorized device first (e.g. test bench
+      // with the WebUsbAllowDevicesForUrls policy — no chooser, no gesture).
+      // Otherwise fall back to the native chooser as before.
+      let device = (await manager.getDevices())[0];
+      if(!device) device = await manager.requestDevice();
       if(!device){ setStatus(t('webusb.deviceNotSelected'),'error'); return; }
       setStatus(t('webusb.connectingTo',{name:device.name}),'loading');
       try{
