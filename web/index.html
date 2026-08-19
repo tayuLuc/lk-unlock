@@ -1896,10 +1896,10 @@ function bigIntToBytes(n, len) {
 async function signToken(privateKey, token) {
     const jwk = await crypto.subtle.exportKey('jwk', privateKey);
     const d = bytesToBigInt(b64UrlToBytes(jwk.d)), n = bytesToBigInt(b64UrlToBytes(jwk.n));
-    // ADB token is ALREADY a 20-byte SHA-1 digest; sign it as-is (no extra
-    // hashing — hashing again yields a wrong signature the device rejects,
-    // forcing a fresh PUBKEY + confirm every time).
-    // PKCS#1 v1.5 block (256 bytes): 00 01 FF..FF 00 || SHA-1 DigestInfo || token
+    // PKCS#1 v1.5 + SHA-1 DigestInfo, token placed as the 20-byte digest
+    // (webadb rsaSign). Do NOT SHA-1(token) again — that is a second hash
+    // and the device rejects the signature. The SHA-1 OID in DigestInfo
+    // (30 21 30 09 06 05 2b 0e 03 02 1a) stays; only the extra hash is gone.
     const block = new Uint8Array(256);
     block[0] = 0x00; block[1] = 0x01;
     for (let i = 2; i < 220; i++) block[i] = 0xFF;
@@ -2001,16 +2001,24 @@ class UsbTransport {
     }
     async send(bytes) {
         if (this.closed) throw new Error('Transport closed');
-        // Serialize writes so concurrent OPEN/WRTE cannot interleave. Match
-        // webadb: one URB for the whole ADB packet, then a ZLP if the length
-        // is an exact multiple of wMaxPacketSize (USB short-packet rule).
+        // USB keeps URB boundaries. ya-webadb's AdbPacketSerializeStream
+        // enqueues the 24-byte header and the payload as two writes:
+        // "otherwise the read operation on device will fail." A single
+        // 243-byte CNXN URB resets MediaTek gadgets (device disconnects,
+        // no AUTH dialog). WS is a byte stream and must NOT split.
         const run = async () => {
-            const result = await this.device.transferOut(this.outEp, bytes);
-            const mask = this.packetSize - 1;
-            if (mask && (bytes.byteLength & mask) === 0) {
-                await this.device.transferOut(this.outEp, new Uint8Array(0));
+            const parts = bytes.byteLength > 24
+                ? [bytes.subarray(0, 24), bytes.subarray(24)]
+                : [bytes];
+            let last;
+            for (const part of parts) {
+                last = await this.device.transferOut(this.outEp, part);
+                const mask = this.packetSize - 1;
+                if (mask && (part.byteLength & mask) === 0) {
+                    await this.device.transferOut(this.outEp, new Uint8Array(0));
+                }
             }
-            return result;
+            return last;
         };
         const queued = this._writes.then(run, run);
         this._writes = queued.then(() => {}, () => {});
@@ -2320,14 +2328,13 @@ async function connectWs(url) {
       if(!inEp||!outEp) throw new Error('ADB endpoints not found (in='+(inEp?.endpointNumber||'-')+' out='+(outEp?.endpointNumber||'-')+')');
       log('Chosen: iface #'+iface.interfaceNumber+' alt '+alt.alternateSetting+' → IN ep '+inEp.endpointNumber+' ('+inEp.type+', pkt '+inEp.packetSize+') OUT ep '+outEp.endpointNumber+' ('+outEp.type+', pkt '+outEp.packetSize+')');
       const transport = new UsbTransport(device, inEp.endpointNumber, outEp.endpointNumber, inEp.packetSize||512);
-      // Prime the IN endpoint BEFORE CNXN — webadb's readable pull starts
-      // transferIn first, then writes Connect. Some adbd builds only reply
-      // when a read is already pending.
-      const firstPacketPromise=readPacket(transport);
+      // Send CNXN as two URBs (24-byte header, then payload) then read.
+      // Do not prime transferIn first: a pending IN during a bad CNXN URB
+      // is what surfaced as 'device was disconnected' after the 243-byte write.
       const cnxnPayload=new TextEncoder().encode('host::features='+CNXN_FEATURES+';');
       const outRes=await sendPacket(transport, ADB.CMD_CNXN, ADB.VERSION, ADB.MAX_PAYLOAD, cnxnPayload);
-      log('CNXN transferOut: status='+outRes.status+' bytes='+outRes.bytesWritten);
-      const firstPacket=await firstPacketPromise;
+      log('CNXN transferOut: status='+outRes.status+' bytes='+outRes.bytesWritten+' (payload URB; header was 24)');
+      const firstPacket=await readPacket(transport);
       await authenticate(transport, firstPacket);
       return {connection:new AdbConnection(new AdbDaemon(transport), device.productName||device.serialNumber||'Android', device.serialNumber||''), name:device.productName||device.serialNumber||'Android', raw:device};
     }catch(e){

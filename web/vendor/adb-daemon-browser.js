@@ -17,6 +17,8 @@
 //   struct) + " " + comment + NUL, not an SPKI key.
 // - WebUSB: transferIn length must be a multiple of wMaxPacketSize (macOS
 //   returns `babble` otherwise). Always read endpoint.packetSize, never 24.
+// - WebUSB OUT: send the 24-byte ADB header and the payload as two URBs
+//   (USB preserves packet boundaries; concatenating CNXN resets MediaTek).
 
 const ADB = {
     CMD_CNXN: 0x4e584e43, CMD_AUTH: 0x48545541, CMD_OPEN: 0x4e45504f,
@@ -63,10 +65,10 @@ function bigIntToBytes(n, len) {
 async function signToken(privateKey, token) {
     const jwk = await crypto.subtle.exportKey('jwk', privateKey);
     const d = bytesToBigInt(b64UrlToBytes(jwk.d)), n = bytesToBigInt(b64UrlToBytes(jwk.n));
-    // ADB token is ALREADY a 20-byte SHA-1 digest; sign it as-is (no extra
-    // hashing — hashing again yields a wrong signature the device rejects,
-    // forcing a fresh PUBKEY + confirm every time).
-    // PKCS#1 v1.5 block (256 bytes): 00 01 FF..FF 00 || SHA-1 DigestInfo || token
+    // PKCS#1 v1.5 + SHA-1 DigestInfo, token placed as the 20-byte digest
+    // (webadb rsaSign). Do NOT SHA-1(token) again — that is a second hash
+    // and the device rejects the signature. The SHA-1 OID in DigestInfo
+    // (30 21 30 09 06 05 2b 0e 03 02 1a) stays; only the extra hash is gone.
     const block = new Uint8Array(256);
     block[0] = 0x00; block[1] = 0x01;
     for (let i = 2; i < 220; i++) block[i] = 0xFF;
@@ -168,16 +170,24 @@ class UsbTransport {
     }
     async send(bytes) {
         if (this.closed) throw new Error('Transport closed');
-        // Serialize writes so concurrent OPEN/WRTE cannot interleave. Match
-        // webadb: one URB for the whole ADB packet, then a ZLP if the length
-        // is an exact multiple of wMaxPacketSize (USB short-packet rule).
+        // USB keeps URB boundaries. ya-webadb's AdbPacketSerializeStream
+        // enqueues the 24-byte header and the payload as two writes:
+        // "otherwise the read operation on device will fail." A single
+        // 243-byte CNXN URB resets MediaTek gadgets (device disconnects,
+        // no AUTH dialog). WS is a byte stream and must NOT split.
         const run = async () => {
-            const result = await this.device.transferOut(this.outEp, bytes);
-            const mask = this.packetSize - 1;
-            if (mask && (bytes.byteLength & mask) === 0) {
-                await this.device.transferOut(this.outEp, new Uint8Array(0));
+            const parts = bytes.byteLength > 24
+                ? [bytes.subarray(0, 24), bytes.subarray(24)]
+                : [bytes];
+            let last;
+            for (const part of parts) {
+                last = await this.device.transferOut(this.outEp, part);
+                const mask = this.packetSize - 1;
+                if (mask && (part.byteLength & mask) === 0) {
+                    await this.device.transferOut(this.outEp, new Uint8Array(0));
+                }
             }
-            return result;
+            return last;
         };
         const queued = this._writes.then(run, run);
         this._writes = queued.then(() => {}, () => {});
