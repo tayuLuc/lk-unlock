@@ -293,7 +293,8 @@ async function readPacket(transport, timeoutMs = 15000) {
         const v = new DataView(header.buffer, header.byteOffset, 24);
         const cmd = v.getUint32(0, true), arg0 = v.getUint32(4, true), arg1 = v.getUint32(8, true), len = v.getUint32(12, true);
         const magic = v.getUint32(20, true);
-        if (magic !== (cmd ^ 0xffffffff) || len > ADB.MAX_PAYLOAD) {
+        const expectedMagic = (cmd ^ 0xffffffff) >>> 0;
+        if (magic !== expectedMagic || len > ADB.MAX_PAYLOAD) {
             // USB bulk can deliver leftover/ZLP bytes; skip noise that is not
             // an ADB command. A known command with bad magic is a real error.
             if (!PKT_CMDS[cmd]) continue;

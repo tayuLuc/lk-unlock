@@ -1850,6 +1850,8 @@ async function showKeyFingerprint(){
 //   struct) + " " + comment + NUL, not an SPKI key.
 // - WebUSB: transferIn length must be a multiple of wMaxPacketSize (macOS
 //   returns `babble` otherwise). Always read endpoint.packetSize, never 24.
+// - WebUSB OUT: send the 24-byte ADB header and the payload as two URBs
+//   (USB preserves packet boundaries; concatenating CNXN resets MediaTek).
 
 const ADB = {
     CMD_CNXN: 0x4e584e43, CMD_AUTH: 0x48545541, CMD_OPEN: 0x4e45504f,
@@ -2124,7 +2126,8 @@ async function readPacket(transport, timeoutMs = 15000) {
         const v = new DataView(header.buffer, header.byteOffset, 24);
         const cmd = v.getUint32(0, true), arg0 = v.getUint32(4, true), arg1 = v.getUint32(8, true), len = v.getUint32(12, true);
         const magic = v.getUint32(20, true);
-        if (magic !== (cmd ^ 0xffffffff) || len > ADB.MAX_PAYLOAD) {
+        const expectedMagic = (cmd ^ 0xffffffff) >>> 0;
+        if (magic !== expectedMagic || len > ADB.MAX_PAYLOAD) {
             // USB bulk can deliver leftover/ZLP bytes; skip noise that is not
             // an ADB command. A known command with bad magic is a real error.
             if (!PKT_CMDS[cmd]) continue;
