@@ -2317,6 +2317,9 @@ async function connectWs(url) {
       }
     }
     await authenticate(transport, firstPacket);
+    // After auth, adbd on MediaTek may briefly re-init the USB endpoints;
+    // give it a beat before opening sockets so OPEN gets an OKAY.
+    await new Promise(r=>setTimeout(r,300));
     return {connection:new AdbConnection(new AdbDaemon(transport), device.productName||device.serialNumber||'Android', device.serialNumber||''), name:device.productName||device.serialNumber||'Android', raw:device};
   }
 
