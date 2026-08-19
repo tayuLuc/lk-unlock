@@ -1848,6 +1848,8 @@ async function showKeyFingerprint(){
 //   with raw BigInt modular math instead (PKCS#1 v1.5, SHA-1).
 // - adbd expects AUTH_PUBLICKEY payload = base64(mincrypt RSAPublicKey
 //   struct) + " " + comment + NUL, not an SPKI key.
+// - WebUSB: transferIn length must be a multiple of wMaxPacketSize (macOS
+//   returns `babble` otherwise). Always read endpoint.packetSize, never 24.
 
 const ADB = {
     CMD_CNXN: 0x4e584e43, CMD_AUTH: 0x48545541, CMD_OPEN: 0x4e45504f,
@@ -1988,32 +1990,43 @@ function logPkt(dir, cmd, arg0, arg1, len) {
 // Both transports expose send(bytes) + readBytes(count) + close(), so the
 // packet layer, AUTH handshake and socket multiplexing are transport-agnostic.
 class UsbTransport {
-    constructor(device, inEp, outEp) {
+    constructor(device, inEp, outEp, packetSize = 512) {
         this.device = device; this.inEp = inEp; this.outEp = outEp;
+        // wMaxPacketSize of the bulk endpoint. transferIn length MUST be a
+        // multiple of this on macOS/Linux or Chrome returns `babble` and the
+        // pipe dies. app.webadb.com always reads `endpoint.packetSize`.
+        this.packetSize = packetSize || 512;
         this.buf = new Uint8Array(0); this.closed = false;
+        this._writes = Promise.resolve();
     }
     async send(bytes) {
         if (this.closed) throw new Error('Transport closed');
-        // MediaTek/Xiaomi gadget driver expects the 24-byte header as its own
-        // URB so it can parse payloadLength and set up the DMA buffer; a
-        // single header+payload URB can overflow its parser and STALL the
-        // in-endpoint. Send header and payload as separate transferOuts.
-        if (bytes.byteLength > 24) {
-            await this.device.transferOut(this.outEp, bytes.subarray(0, 24));
-            return await this.device.transferOut(this.outEp, bytes.subarray(24));
-        }
-        return await this.device.transferOut(this.outEp, bytes);
+        // Serialize writes so concurrent OPEN/WRTE cannot interleave. Match
+        // webadb: one URB for the whole ADB packet, then a ZLP if the length
+        // is an exact multiple of wMaxPacketSize (USB short-packet rule).
+        const run = async () => {
+            const result = await this.device.transferOut(this.outEp, bytes);
+            const mask = this.packetSize - 1;
+            if (mask && (bytes.byteLength & mask) === 0) {
+                await this.device.transferOut(this.outEp, new Uint8Array(0));
+            }
+            return result;
+        };
+        const queued = this._writes.then(run, run);
+        this._writes = queued.then(() => {}, () => {});
+        return queued;
     }
     async readBytes(count, timeoutMs = 15000) {
         if (this.closed) throw new Error('Transport closed');
-        // Read transferIn directly (like webadb) — a Promise.race wrapper can
-        // leave a dangling transferIn on MediaTek that drops the USB endpoint
-        // mid-handshake (auth reads work, but subsequent OKAY reads fail).
+        void timeoutMs;
         while (this.buf.length < count) {
-            const want = Math.min(count - this.buf.length, 16384);
-            const res = await this.device.transferIn(this.inEp, want);
-            if (res.status !== 'ok') throw new Error('USB transfer error (status ' + res.status + ')');
-            const chunk = new Uint8Array(res.data.buffer, res.data.byteOffset, res.data.byteLength);
+            const res = await this.device.transferIn(this.inEp, this.packetSize);
+            if (res.status !== 'ok') {
+                throw new Error('USB transfer error (status ' + res.status + ')');
+            }
+            if (!res.data || res.data.byteLength === 0) continue; // ZLP
+            // Copy: Chrome may reuse the underlying ArrayBuffer.
+            const chunk = new Uint8Array(res.data.buffer, res.data.byteOffset, res.data.byteLength).slice();
             const merged = new Uint8Array(this.buf.length + chunk.length);
             merged.set(this.buf); merged.set(chunk, this.buf.length);
             this.buf = merged;
@@ -2098,12 +2111,21 @@ async function sendPacket(transport, cmd, arg0, arg1, payload = new Uint8Array()
 }
 
 async function readPacket(transport, timeoutMs = 15000) {
-    const header = await transport.readBytes(24, timeoutMs);
-    const v = new DataView(header.buffer, header.byteOffset, 24);
-    const cmd = v.getUint32(0, true), arg0 = v.getUint32(4, true), arg1 = v.getUint32(8, true), len = v.getUint32(12, true);
-    const payload = len > 0 ? await transport.readBytes(len, timeoutMs) : new Uint8Array(0);
-    logPkt('IN', cmd, arg0, arg1, len);
-    return { cmd, arg0, arg1, payload };
+    for (;;) {
+        const header = await transport.readBytes(24, timeoutMs);
+        const v = new DataView(header.buffer, header.byteOffset, 24);
+        const cmd = v.getUint32(0, true), arg0 = v.getUint32(4, true), arg1 = v.getUint32(8, true), len = v.getUint32(12, true);
+        const magic = v.getUint32(20, true);
+        if (magic !== (cmd ^ 0xffffffff) || len > ADB.MAX_PAYLOAD) {
+            // USB bulk can deliver leftover/ZLP bytes; skip noise that is not
+            // an ADB command. A known command with bad magic is a real error.
+            if (!PKT_CMDS[cmd]) continue;
+            throw new Error('ADB packet header invalid (cmd=' + pktCmd(cmd) + ' len=' + len + ')');
+        }
+        const payload = len > 0 ? await transport.readBytes(len, timeoutMs) : new Uint8Array(0);
+        logPkt('IN', cmd, arg0, arg1, len);
+        return { cmd, arg0, arg1, payload };
+    }
 }
 
 // Device feature list announced in CNXN. Matches webadb's list (no devraw /
@@ -2240,85 +2262,78 @@ async function connectWs(url) {
     log(`<span class="pkt-${dir}">[${dir}]</span> ${cmd} a0=${a0} a1=${arg1} len=${len}`);
   });
 
-  // ── WebUSB connector (unchanged diagnostics, transport-based I/O) ─────
+  // ── WebUSB connector (I/O matches app.webadb.com / ya-webadb) ─────────
   async function connectAdb() {
     const device = await navigator.usb.requestDevice({filters:[{classCode:255,subclassCode:66,protocolCode:1}]});
     if(!device) return null;
-    await device.open();
-    // Full descriptor dump for diagnostics.
-    for(const cfg of device.configurations||[]){
-      log(`Config ${cfg.configurationValue}: ${cfg.interfaces.length} interface(s)`);
-      for(const ifc of cfg.interfaces){
-        log(`  iface #${ifc.interfaceNumber} claimed=${ifc.claimed} activeAlt=${ifc.alternate?.alternateSetting}`);
-        for(const a of ifc.alternates){
-          const eps=a.endpoints.map(e=>`${e.direction}:${e.endpointNumber}/${e.type}`).join(' ');
-          log(`    alt ${a.alternateSetting} class=${a.interfaceClass}/${a.interfaceSubclass}/${a.interfaceProtocol} eps[${eps}]`);
-        }
-      }
-    }
-    let chosen=null;
-    for(const config of device.configurations||[]){
-      if(chosen) break;
-      for(const iface of config.interfaces){
-        for(const alt of iface.alternates){
-          if(alt.interfaceClass===255 && alt.interfaceSubclass===66 && alt.interfaceProtocol===1){
-            chosen={config,iface,alt}; break;
+    try{
+      await device.open();
+      // Full descriptor dump for diagnostics.
+      for(const cfg of device.configurations||[]){
+        log(`Config ${cfg.configurationValue}: ${cfg.interfaces.length} interface(s)`);
+        for(const ifc of cfg.interfaces){
+          log(`  iface #${ifc.interfaceNumber} claimed=${ifc.claimed} activeAlt=${ifc.alternate?.alternateSetting}`);
+          for(const a of ifc.alternates){
+            const eps=a.endpoints.map(e=>`${e.direction}:${e.endpointNumber}/${e.type} pkt=${e.packetSize}`).join(' ');
+            log(`    alt ${a.alternateSetting} class=${a.interfaceClass}/${a.interfaceSubclass}/${a.interfaceProtocol} eps[${eps}]`);
           }
         }
+      }
+      let chosen=null;
+      for(const config of device.configurations||[]){
         if(chosen) break;
+        for(const iface of config.interfaces){
+          for(const alt of iface.alternates){
+            if(alt.interfaceClass===255 && alt.interfaceSubclass===66 && alt.interfaceProtocol===1){
+              chosen={config,iface,alt}; break;
+            }
+          }
+          if(chosen) break;
+        }
       }
-    }
-    if(!chosen) throw new Error('ADB interface not found');
-    const {config,iface,alt}=chosen;
-    if(device.configuration?.configurationValue!==config.configurationValue)
-      await device.selectConfiguration(config.configurationValue);
-    try{ if(!iface.claimed) await device.claimInterface(iface.interfaceNumber); }
-    catch(claimErr){
-      const msg=(claimErr.message||'').toLowerCase();
-      if(msg.includes('claim')||msg.includes('in use')) throw new Error('USB_BLOCKED');
-      throw claimErr;
-    }
-    // No selectAlternateInterface: ADB uses bulk endpoints (alt 0), and
-    // re-selecting an alternate can trigger side-effects / resets on some
-    // custom ROMs. webadb does not require it for bulk.
-    let inEp=null, outEp=null;
-    for(const ep of alt.endpoints){
-      if(ep.direction==='in'&&!inEp) inEp=ep;
-      else if(ep.direction==='out'&&!outEp) outEp=ep;
-      if(inEp&&outEp) break;
-    }
-    if(!inEp||!outEp) throw new Error('ADB endpoints not found (in='+(inEp?.endpointNumber||'-')+' out='+(outEp?.endpointNumber||'-')+')');
-    log('Chosen: iface #'+iface.interfaceNumber+' alt '+alt.alternateSetting+' → IN ep '+inEp.endpointNumber+' ('+inEp.type+') OUT ep '+outEp.endpointNumber+' ('+outEp.type+')');
-    const transport = new UsbTransport(device, inEp.endpointNumber, outEp.endpointNumber);
-    // Send CNXN, log the actual transferOut result.
-    const cnxnPayload=new TextEncoder().encode('host::features='+CNXN_FEATURES+';');
-    const outRes=await sendPacket(transport, ADB.CMD_CNXN, ADB.VERSION, ADB.MAX_PAYLOAD, cnxnPayload);
-    log('CNXN transferOut: status='+outRes.status+' bytes='+outRes.bytesWritten);
-    // adbd on Xiaomi/MediaTek may need a few ms to initialize its response
-    // after CNXN before the in-endpoint delivers a packet.
-    await new Promise(r=>setTimeout(r,50));
-    // Read the first packet with full error detail.
-    let firstPacket;
-    try{
-      firstPacket=await readPacket(transport);
-    }catch(readErr){
-      log('First read failed: '+readErr.message);
-      // Retry the read once WITHOUT device.reset() — reset drops the USB
-      // connection on MIUI (subsequent claim fails with 'device was
-      // disconnected'). Wait a beat and read again.
-      await new Promise(r=>setTimeout(r,100));
-      try{
-        firstPacket=await readPacket(transport);
-      }catch(e2){
-        log('Second read failed: '+e2.message);
-        throw new Error('USB handshake failed: '+readErr.message+' / '+e2.message);
+      if(!chosen) throw new Error('ADB interface not found');
+      const {config,iface,alt}=chosen;
+      if(device.configuration?.configurationValue!==config.configurationValue)
+        await device.selectConfiguration(config.configurationValue);
+      try{ if(!iface.claimed) await device.claimInterface(iface.interfaceNumber); }
+      catch(claimErr){
+        const msg=(claimErr.message||'').toLowerCase();
+        if(msg.includes('claim')||msg.includes('in use')) throw new Error('USB_BLOCKED');
+        throw claimErr;
       }
+      // Same as webadb: only switch alternate if it is not already active.
+      if(iface.alternate?.alternateSetting!==alt.alternateSetting)
+        await device.selectAlternateInterface(iface.interfaceNumber, alt.alternateSetting);
+      let inEp=null, outEp=null;
+      for(const ep of alt.endpoints){
+        if(ep.type && ep.type!=='bulk') continue;
+        if(ep.direction==='in'&&!inEp) inEp=ep;
+        else if(ep.direction==='out'&&!outEp) outEp=ep;
+        if(inEp&&outEp) break;
+      }
+      if(!inEp||!outEp){
+        for(const ep of alt.endpoints){
+          if(ep.direction==='in'&&!inEp) inEp=ep;
+          else if(ep.direction==='out'&&!outEp) outEp=ep;
+        }
+      }
+      if(!inEp||!outEp) throw new Error('ADB endpoints not found (in='+(inEp?.endpointNumber||'-')+' out='+(outEp?.endpointNumber||'-')+')');
+      log('Chosen: iface #'+iface.interfaceNumber+' alt '+alt.alternateSetting+' → IN ep '+inEp.endpointNumber+' ('+inEp.type+', pkt '+inEp.packetSize+') OUT ep '+outEp.endpointNumber+' ('+outEp.type+', pkt '+outEp.packetSize+')');
+      const transport = new UsbTransport(device, inEp.endpointNumber, outEp.endpointNumber, inEp.packetSize||512);
+      // Prime the IN endpoint BEFORE CNXN — webadb's readable pull starts
+      // transferIn first, then writes Connect. Some adbd builds only reply
+      // when a read is already pending.
+      const firstPacketPromise=readPacket(transport);
+      const cnxnPayload=new TextEncoder().encode('host::features='+CNXN_FEATURES+';');
+      const outRes=await sendPacket(transport, ADB.CMD_CNXN, ADB.VERSION, ADB.MAX_PAYLOAD, cnxnPayload);
+      log('CNXN transferOut: status='+outRes.status+' bytes='+outRes.bytesWritten);
+      const firstPacket=await firstPacketPromise;
+      await authenticate(transport, firstPacket);
+      return {connection:new AdbConnection(new AdbDaemon(transport), device.productName||device.serialNumber||'Android', device.serialNumber||''), name:device.productName||device.serialNumber||'Android', raw:device};
+    }catch(e){
+      try{ await device.close(); }catch(_){}
+      throw e;
     }
-    await authenticate(transport, firstPacket);
-    // After auth, adbd on MediaTek may briefly re-init the USB endpoints;
-    // give it a beat before opening sockets so OPEN gets an OKAY.
-    await new Promise(r=>setTimeout(r,300));
-    return {connection:new AdbConnection(new AdbDaemon(transport), device.productName||device.serialNumber||'Android', device.serialNumber||''), name:device.productName||device.serialNumber||'Android', raw:device};
   }
 
   // ── WebSocket (WebSockify) connector — no WebUSB needed ───────────────

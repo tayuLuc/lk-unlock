@@ -15,6 +15,8 @@
 //   with raw BigInt modular math instead (PKCS#1 v1.5, SHA-1).
 // - adbd expects AUTH_PUBLICKEY payload = base64(mincrypt RSAPublicKey
 //   struct) + " " + comment + NUL, not an SPKI key.
+// - WebUSB: transferIn length must be a multiple of wMaxPacketSize (macOS
+//   returns `babble` otherwise). Always read endpoint.packetSize, never 24.
 
 const ADB = {
     CMD_CNXN: 0x4e584e43, CMD_AUTH: 0x48545541, CMD_OPEN: 0x4e45504f,
@@ -155,32 +157,43 @@ function logPkt(dir, cmd, arg0, arg1, len) {
 // Both transports expose send(bytes) + readBytes(count) + close(), so the
 // packet layer, AUTH handshake and socket multiplexing are transport-agnostic.
 class UsbTransport {
-    constructor(device, inEp, outEp) {
+    constructor(device, inEp, outEp, packetSize = 512) {
         this.device = device; this.inEp = inEp; this.outEp = outEp;
+        // wMaxPacketSize of the bulk endpoint. transferIn length MUST be a
+        // multiple of this on macOS/Linux or Chrome returns `babble` and the
+        // pipe dies. app.webadb.com always reads `endpoint.packetSize`.
+        this.packetSize = packetSize || 512;
         this.buf = new Uint8Array(0); this.closed = false;
+        this._writes = Promise.resolve();
     }
     async send(bytes) {
         if (this.closed) throw new Error('Transport closed');
-        // MediaTek/Xiaomi gadget driver expects the 24-byte header as its own
-        // URB so it can parse payloadLength and set up the DMA buffer; a
-        // single header+payload URB can overflow its parser and STALL the
-        // in-endpoint. Send header and payload as separate transferOuts.
-        if (bytes.byteLength > 24) {
-            await this.device.transferOut(this.outEp, bytes.subarray(0, 24));
-            return await this.device.transferOut(this.outEp, bytes.subarray(24));
-        }
-        return await this.device.transferOut(this.outEp, bytes);
+        // Serialize writes so concurrent OPEN/WRTE cannot interleave. Match
+        // webadb: one URB for the whole ADB packet, then a ZLP if the length
+        // is an exact multiple of wMaxPacketSize (USB short-packet rule).
+        const run = async () => {
+            const result = await this.device.transferOut(this.outEp, bytes);
+            const mask = this.packetSize - 1;
+            if (mask && (bytes.byteLength & mask) === 0) {
+                await this.device.transferOut(this.outEp, new Uint8Array(0));
+            }
+            return result;
+        };
+        const queued = this._writes.then(run, run);
+        this._writes = queued.then(() => {}, () => {});
+        return queued;
     }
     async readBytes(count, timeoutMs = 15000) {
         if (this.closed) throw new Error('Transport closed');
-        // Read transferIn directly (like webadb) — a Promise.race wrapper can
-        // leave a dangling transferIn on MediaTek that drops the USB endpoint
-        // mid-handshake (auth reads work, but subsequent OKAY reads fail).
+        void timeoutMs;
         while (this.buf.length < count) {
-            const want = Math.min(count - this.buf.length, 16384);
-            const res = await this.device.transferIn(this.inEp, want);
-            if (res.status !== 'ok') throw new Error('USB transfer error (status ' + res.status + ')');
-            const chunk = new Uint8Array(res.data.buffer, res.data.byteOffset, res.data.byteLength);
+            const res = await this.device.transferIn(this.inEp, this.packetSize);
+            if (res.status !== 'ok') {
+                throw new Error('USB transfer error (status ' + res.status + ')');
+            }
+            if (!res.data || res.data.byteLength === 0) continue; // ZLP
+            // Copy: Chrome may reuse the underlying ArrayBuffer.
+            const chunk = new Uint8Array(res.data.buffer, res.data.byteOffset, res.data.byteLength).slice();
             const merged = new Uint8Array(this.buf.length + chunk.length);
             merged.set(this.buf); merged.set(chunk, this.buf.length);
             this.buf = merged;
@@ -265,12 +278,21 @@ async function sendPacket(transport, cmd, arg0, arg1, payload = new Uint8Array()
 }
 
 async function readPacket(transport, timeoutMs = 15000) {
-    const header = await transport.readBytes(24, timeoutMs);
-    const v = new DataView(header.buffer, header.byteOffset, 24);
-    const cmd = v.getUint32(0, true), arg0 = v.getUint32(4, true), arg1 = v.getUint32(8, true), len = v.getUint32(12, true);
-    const payload = len > 0 ? await transport.readBytes(len, timeoutMs) : new Uint8Array(0);
-    logPkt('IN', cmd, arg0, arg1, len);
-    return { cmd, arg0, arg1, payload };
+    for (;;) {
+        const header = await transport.readBytes(24, timeoutMs);
+        const v = new DataView(header.buffer, header.byteOffset, 24);
+        const cmd = v.getUint32(0, true), arg0 = v.getUint32(4, true), arg1 = v.getUint32(8, true), len = v.getUint32(12, true);
+        const magic = v.getUint32(20, true);
+        if (magic !== (cmd ^ 0xffffffff) || len > ADB.MAX_PAYLOAD) {
+            // USB bulk can deliver leftover/ZLP bytes; skip noise that is not
+            // an ADB command. A known command with bad magic is a real error.
+            if (!PKT_CMDS[cmd]) continue;
+            throw new Error('ADB packet header invalid (cmd=' + pktCmd(cmd) + ' len=' + len + ')');
+        }
+        const payload = len > 0 ? await transport.readBytes(len, timeoutMs) : new Uint8Array(0);
+        logPkt('IN', cmd, arg0, arg1, len);
+        return { cmd, arg0, arg1, payload };
+    }
 }
 
 // Device feature list announced in CNXN. Matches webadb's list (no devraw /
