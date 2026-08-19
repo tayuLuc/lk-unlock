@@ -388,7 +388,7 @@ class AdbConnection {
 async function connectWs(url) {
     const transport = new WsTransport(url);
     await transport.connect();
-    const cnxnPayload = new TextEncoder().encode('host::features=' + CNXN_FEATURES);
+    const cnxnPayload = new TextEncoder().encode('host::features=' + CNXN_FEATURES + ';');
     await sendPacket(transport, ADB.CMD_CNXN, ADB.VERSION, ADB.MAX_PAYLOAD, cnxnPayload);
     const firstPacket = await readPacket(transport);
     await authenticate(transport, firstPacket);

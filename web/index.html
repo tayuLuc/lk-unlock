@@ -2221,7 +2221,7 @@ class AdbConnection {
 async function connectWs(url) {
     const transport = new WsTransport(url);
     await transport.connect();
-    const cnxnPayload = new TextEncoder().encode('host::features=' + CNXN_FEATURES);
+    const cnxnPayload = new TextEncoder().encode('host::features=' + CNXN_FEATURES + ';');
     await sendPacket(transport, ADB.CMD_CNXN, ADB.VERSION, ADB.MAX_PAYLOAD, cnxnPayload);
     const firstPacket = await readPacket(transport);
     await authenticate(transport, firstPacket);
@@ -2285,7 +2285,7 @@ async function connectWs(url) {
     log('Chosen: iface #'+iface.interfaceNumber+' alt '+alt.alternateSetting+' → IN ep '+inEp.endpointNumber+' ('+inEp.type+') OUT ep '+outEp.endpointNumber+' ('+outEp.type+')');
     const transport = new UsbTransport(device, inEp.endpointNumber, outEp.endpointNumber);
     // Send CNXN, log the actual transferOut result.
-    const cnxnPayload=new TextEncoder().encode('host::features='+CNXN_FEATURES);
+    const cnxnPayload=new TextEncoder().encode('host::features='+CNXN_FEATURES+';');
     const outRes=await sendPacket(transport, ADB.CMD_CNXN, ADB.VERSION, ADB.MAX_PAYLOAD, cnxnPayload);
     log('CNXN transferOut: status='+outRes.status+' bytes='+outRes.bytesWritten);
     // adbd on Xiaomi/MediaTek may need a few ms to initialize its response
@@ -2316,7 +2316,7 @@ async function connectWs(url) {
   async function connectAdbWs(url) {
     const transport = new WsTransport(url);
     await transport.connect();
-    const cnxnPayload = new TextEncoder().encode('host::features=' + CNXN_FEATURES);
+    const cnxnPayload = new TextEncoder().encode('host::features=' + CNXN_FEATURES + ';');
     await sendPacket(transport, ADB.CMD_CNXN, ADB.VERSION, ADB.MAX_PAYLOAD, cnxnPayload);
     const firstPacket = await readPacket(transport);
     await authenticate(transport, firstPacket);
