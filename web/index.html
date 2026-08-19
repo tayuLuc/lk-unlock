@@ -1942,8 +1942,18 @@ async function getAdbPublicKeyPayload(cryptoKey, comment) {
 }
 
 // localStorage ADB key store (shared with the app's WebUSB flow).
-// Two-phase commit: a key is only persisted after a successful CNXN, so a
-// timed-out handshake does not leave an unconfirmed (junk) key behind.
+//
+// Important UX detail:
+// - If the pending key is persisted only after a successful CNXN, then any
+//   failure happening *after* the user accepted the RSA dialog (or any
+//   transport/packet error) causes the next reconnect to generate a brand
+//   new key => a new fingerprint => the phone asks again.
+//
+// To keep fingerprint stable across reconnect attempts, we persist the
+// generated key right after sending the PUBKEY. We still try to finish the
+// handshake; if it fails, reusing the stored key on the next attempt should
+// avoid another phone confirmation (because the phone already trusts that
+// public key).
 const KeyStore = {
     async iterateKeys() {
         const json = localStorage.getItem('adb_keys');
@@ -1973,9 +1983,20 @@ const KeyStore = {
     },
     // Persists only after a successful handshake.
     async commitPendingKey(pending) {
-        const keys = JSON.parse(localStorage.getItem('adb_keys') || '[]');
-        keys.push(pending._storageData);
-        localStorage.setItem('adb_keys', JSON.stringify(keys));
+        try {
+            const keys = JSON.parse(localStorage.getItem('adb_keys') || '[]');
+            const incoming = pending?._storageData;
+            if (!incoming) return;
+            const incomingPub = incoming.publicKey;
+            // Dedupe by publicKey to avoid bloat if we commit on retries.
+            if (keys.some(k => k && k.publicKey === incomingPub)) return;
+            keys.push(incoming);
+            // Keep it bounded (should be very small in normal use).
+            while (keys.length > 5) keys.shift();
+            localStorage.setItem('adb_keys', JSON.stringify(keys));
+        } catch (e) {
+            console.warn('KeyStore.commitPendingKey failed:', e);
+        }
     },
 };
 
@@ -2165,12 +2186,12 @@ async function authenticate(transport, firstPacket) {
     }
     const pending = await KeyStore.generatePendingKey();
     await sendPacket(transport, ADB.CMD_AUTH, ADB.AUTH_RSAPUBLICKEY, 0, pending.publicKeyPayload);
+    // Persist immediately to keep fingerprint stable across reconnect attempts.
+    // This mirrors how `private.pem` is treated: once we have a key, we keep it.
+    await KeyStore.commitPendingKey(pending);
     // Wait for the user to confirm on the phone (RSA dialog) — long timeout.
     packet = await readPacket(transport, 120000);
-    if (packet.cmd === ADB.CMD_CNXN) {
-        await KeyStore.commitPendingKey(pending); // persist only on success
-        return packet.payload;
-    }
+    if (packet.cmd === ADB.CMD_CNXN) return packet.payload;
     throw new Error('Auth failed or rejected');
 }
 
