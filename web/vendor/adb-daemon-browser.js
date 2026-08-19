@@ -117,9 +117,11 @@ const KeyStore = {
         if (!json) return [];
         const out = [];
         for (const k of JSON.parse(json)) {
-            const bin = Uint8Array.from(atob(k.privateKey), c => c.charCodeAt(0));
-            const priv = await crypto.subtle.importKey('pkcs8', bin, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-1' }, true, ['sign']);
-            out.push({ privateKey: priv, publicKeyPayload: new TextEncoder().encode(k.publicKey) });
+            try {
+                const bin = Uint8Array.from(atob(k.privateKey), c => c.charCodeAt(0));
+                const priv = await crypto.subtle.importKey('pkcs8', bin, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-1' }, true, ['sign']);
+                out.push({ privateKey: priv, publicKeyPayload: new TextEncoder().encode(k.publicKey) });
+            } catch (_) { /* skip unreadable keys; still send a fresh PUBLICKEY */ }
         }
         return out;
     },
@@ -177,7 +179,7 @@ class UsbTransport {
         // no AUTH dialog). WS is a byte stream and must NOT split.
         const run = async () => {
             const parts = bytes.byteLength > 24
-                ? [bytes.subarray(0, 24), bytes.subarray(24)]
+                ? [bytes.slice(0, 24), bytes.slice(24)]
                 : [bytes];
             let last;
             for (const part of parts) {
@@ -295,10 +297,10 @@ async function readPacket(transport, timeoutMs = 15000) {
         const magic = v.getUint32(20, true);
         const expectedMagic = (cmd ^ 0xffffffff) >>> 0;
         if (magic !== expectedMagic || len > ADB.MAX_PAYLOAD) {
-            // USB bulk can deliver leftover/ZLP bytes; skip noise that is not
-            // an ADB command. A known command with bad magic is a real error.
-            if (!PKT_CMDS[cmd]) continue;
-            throw new Error('ADB packet header invalid (cmd=' + pktCmd(cmd) + ' len=' + len + ')');
+            // webadb ignores leftover OS-buffered packets from a previous
+            // client until Connect/Auth arrives. Throwing here aborted USB
+            // after a valid AUTH (signed 32-bit xor) and desynced the pipe.
+            continue;
         }
         const payload = len > 0 ? await transport.readBytes(len, timeoutMs) : new Uint8Array(0);
         logPkt('IN', cmd, arg0, arg1, len);

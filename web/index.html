@@ -1950,9 +1950,11 @@ const KeyStore = {
         if (!json) return [];
         const out = [];
         for (const k of JSON.parse(json)) {
-            const bin = Uint8Array.from(atob(k.privateKey), c => c.charCodeAt(0));
-            const priv = await crypto.subtle.importKey('pkcs8', bin, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-1' }, true, ['sign']);
-            out.push({ privateKey: priv, publicKeyPayload: new TextEncoder().encode(k.publicKey) });
+            try {
+                const bin = Uint8Array.from(atob(k.privateKey), c => c.charCodeAt(0));
+                const priv = await crypto.subtle.importKey('pkcs8', bin, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-1' }, true, ['sign']);
+                out.push({ privateKey: priv, publicKeyPayload: new TextEncoder().encode(k.publicKey) });
+            } catch (_) { /* skip unreadable keys; still send a fresh PUBLICKEY */ }
         }
         return out;
     },
@@ -2010,7 +2012,7 @@ class UsbTransport {
         // no AUTH dialog). WS is a byte stream and must NOT split.
         const run = async () => {
             const parts = bytes.byteLength > 24
-                ? [bytes.subarray(0, 24), bytes.subarray(24)]
+                ? [bytes.slice(0, 24), bytes.slice(24)]
                 : [bytes];
             let last;
             for (const part of parts) {
@@ -2128,10 +2130,10 @@ async function readPacket(transport, timeoutMs = 15000) {
         const magic = v.getUint32(20, true);
         const expectedMagic = (cmd ^ 0xffffffff) >>> 0;
         if (magic !== expectedMagic || len > ADB.MAX_PAYLOAD) {
-            // USB bulk can deliver leftover/ZLP bytes; skip noise that is not
-            // an ADB command. A known command with bad magic is a real error.
-            if (!PKT_CMDS[cmd]) continue;
-            throw new Error('ADB packet header invalid (cmd=' + pktCmd(cmd) + ' len=' + len + ')');
+            // webadb ignores leftover OS-buffered packets from a previous
+            // client until Connect/Auth arrives. Throwing here aborted USB
+            // after a valid AUTH (signed 32-bit xor) and desynced the pipe.
+            continue;
         }
         const payload = len > 0 ? await transport.readBytes(len, timeoutMs) : new Uint8Array(0);
         logPkt('IN', cmd, arg0, arg1, len);
@@ -2331,13 +2333,15 @@ async function connectWs(url) {
       if(!inEp||!outEp) throw new Error('ADB endpoints not found (in='+(inEp?.endpointNumber||'-')+' out='+(outEp?.endpointNumber||'-')+')');
       log('Chosen: iface #'+iface.interfaceNumber+' alt '+alt.alternateSetting+' → IN ep '+inEp.endpointNumber+' ('+inEp.type+', pkt '+inEp.packetSize+') OUT ep '+outEp.endpointNumber+' ('+outEp.type+', pkt '+outEp.packetSize+')');
       const transport = new UsbTransport(device, inEp.endpointNumber, outEp.endpointNumber, inEp.packetSize||512);
-      // Send CNXN as two URBs (24-byte header, then payload) then read.
-      // Do not prime transferIn first: a pending IN during a bad CNXN URB
-      // is what surfaced as 'device was disconnected' after the 243-byte write.
+      // webadb starts the IN URB before writing Connect so leftover
+      // kernel packets can be drained and the gadget has a pending read.
+      pktLogOn=true;
+      const firstPacketPromise=readPacket(transport);
       const cnxnPayload=new TextEncoder().encode('host::features='+CNXN_FEATURES+';');
       const outRes=await sendPacket(transport, ADB.CMD_CNXN, ADB.VERSION, ADB.MAX_PAYLOAD, cnxnPayload);
       log('CNXN transferOut: status='+outRes.status+' bytes='+outRes.bytesWritten+' (payload URB; header was 24)');
-      const firstPacket=await readPacket(transport);
+      const firstPacket=await firstPacketPromise;
+      log('First packet: '+pktCmd(firstPacket.cmd)+' a0='+firstPacket.arg0+' len='+firstPacket.payload.length);
       await authenticate(transport, firstPacket);
       return {connection:new AdbConnection(new AdbDaemon(transport), device.productName||device.serialNumber||'Android', device.serialNumber||''), name:device.productName||device.serialNumber||'Android', raw:device};
     }catch(e){
@@ -2381,7 +2385,7 @@ async function connectWs(url) {
     isConnecting=true;
     connectBtn.disabled=true;
     const c=checkWebUSB();
-    if(!c.ok){ setStatus(c.reason,'error'); return; }
+    if(!c.ok){ setStatus(c.reason,'error'); isConnecting=false; connectBtn.disabled=false; return; }
     try{
       setStatus(t('webusb.chooseDevice'),'loading');
       const res=await connectAdb();
@@ -2412,11 +2416,9 @@ async function connectWs(url) {
     if(!adb) return;
     try{
       setStatus(t('webusb.reading'),'loading');
-      const [fp,osv,locked]=await Promise.all([
-        adb.getProp('ro.build.fingerprint').catch(e=>{console.warn('getprop fingerprint:',e);return '';}),
-        adb.getProp('ro.mi.os.version.incremental').catch(e=>{console.warn('getprop os:',e);return '';}),
-        adb.getProp('ro.boot.flash.locked').catch(e=>{console.warn('getprop locked:',e);return '?';})
-      ]);
+      const fp=await adb.getProp('ro.build.fingerprint').catch(e=>{console.warn('getprop fingerprint:',e);return '';});
+      const osv=await adb.getProp('ro.mi.os.version.incremental').catch(e=>{console.warn('getprop os:',e);return '';});
+      const locked=await adb.getProp('ro.boot.flash.locked').catch(e=>{console.warn('getprop locked:',e);return '?';});
       if(fp){
         fpInput.value=fp;
         fpInput.dispatchEvent(new Event('input',{bubbles:true}));
@@ -2443,8 +2445,10 @@ async function connectWs(url) {
     if(!keepClean) setStatus(t('webusb.disconnected'),'default');
   }
   // Physical USB unplug.
-  if(navigator.usb) navigator.usb.addEventListener('disconnect',async()=>{
-    if(adb||usbDevice) await disconnectDevice();
+  if(navigator.usb) navigator.usb.addEventListener('disconnect',async(e)=>{
+    if(usbDevice && e.device!==usbDevice) return;
+    if(!(adb||usbDevice)) return;
+    await disconnectDevice();
     setStatus(t('webusb.deviceDisconnected'),'error');
   });
   connectBtn.addEventListener('click',async()=>{
