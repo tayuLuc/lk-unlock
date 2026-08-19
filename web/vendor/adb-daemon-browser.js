@@ -61,16 +61,16 @@ function bigIntToBytes(n, len) {
 async function signToken(privateKey, token) {
     const jwk = await crypto.subtle.exportKey('jwk', privateKey);
     const d = bytesToBigInt(b64UrlToBytes(jwk.d)), n = bytesToBigInt(b64UrlToBytes(jwk.n));
-    // ADB signs SHA1(token): the device compares the digest embedded in the
-    // signature against SHA1(token) — the raw 20-byte token is NOT the hash.
-    const digest = new Uint8Array(await crypto.subtle.digest('SHA-1', token));
-    // PKCS#1 v1.5 block (256 bytes): 00 01 FF..FF 00 || SHA-1 DigestInfo || SHA1(token)
+    // ADB token is ALREADY a 20-byte SHA-1 digest; sign it as-is (no extra
+    // hashing — hashing again yields a wrong signature the device rejects,
+    // forcing a fresh PUBKEY + confirm every time).
+    // PKCS#1 v1.5 block (256 bytes): 00 01 FF..FF 00 || SHA-1 DigestInfo || token
     const block = new Uint8Array(256);
     block[0] = 0x00; block[1] = 0x01;
     for (let i = 2; i < 220; i++) block[i] = 0xFF;
     block[220] = 0x00;
     block.set([0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14], 221);
-    block.set(digest, 236);
+    block.set(token, 236);
     return bigIntToBytes(modPow(bytesToBigInt(block), d, n), 256);
 }
 
