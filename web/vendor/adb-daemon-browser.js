@@ -173,14 +173,12 @@ class UsbTransport {
     }
     async readBytes(count, timeoutMs = 15000) {
         if (this.closed) throw new Error('Transport closed');
-        const withTimeout = p => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('USB read timeout')), timeoutMs))]);
+        // Read transferIn directly (like webadb) — a Promise.race wrapper can
+        // leave a dangling transferIn on MediaTek that drops the USB endpoint
+        // mid-handshake (auth reads work, but subsequent OKAY reads fail).
         while (this.buf.length < count) {
-            // Read exactly `count` (up to a chunk) — never request a huge
-            // buffer: some MediaTek/Xiaomi adbd stacks reset the USB bus
-            // (re-enumerate) on a 16KB transferIn when only a short packet
-            // is coming. webadb reads 24-byte header then payloadLength.
             const want = Math.min(count - this.buf.length, 16384);
-            const res = await withTimeout(this.device.transferIn(this.inEp, want));
+            const res = await this.device.transferIn(this.inEp, want);
             if (res.status !== 'ok') throw new Error('USB transfer error (status ' + res.status + ')');
             const chunk = new Uint8Array(res.data.buffer, res.data.byteOffset, res.data.byteLength);
             const merged = new Uint8Array(this.buf.length + chunk.length);
