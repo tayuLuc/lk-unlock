@@ -270,6 +270,7 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
     </svg>
     MTK Forge
   </div>
+  <div class="badge" id="badge"><span class="dot"></span><span id="badgeText">…</span></div>
   <button id="langBtn" type="button" style="margin-left:8px;cursor:pointer;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:999px;padding:6px 13px;font:12px var(--mono);color:var(--muted)">EN</button>
 </header>
 
@@ -285,7 +286,7 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
     <article class="card">
       <div class="c-head"><span class="num">01</span><h2 data-i18n="patch.title">Патч lk.img</h2><span class="c-tag">bootloader</span></div>
       <p class="c-desc" data-i18n="patch.desc">Загрузите образ — на выходе получите пропатченный lk_patched.img и приватный ключ private.pem.</p>
-      <label class="drop" id="drop" for="lkfile">
+      <label class="drop" id="drop">
         <div class="drop-empty">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 16V4m0 0 4 4m-4-4L8 8M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>
@@ -301,7 +302,7 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
               <div class="file-card-meta" id="fileCardMeta"></div>
             </div>
             <div class="file-card-actions">
-              <button type="button" class="btn ghost mini" id="btnReplace" onclick="els.lkfile.click()" data-i18n="key.replace">Заменить</button>
+              <button type="button" class="btn ghost mini" id="btnReplace" data-i18n="key.replace">Заменить</button>
               <button type="button" class="icon-btn" id="btnRemove" data-i18n-attr="aria-label:key.removeFile" aria-label="Убрать файл">✕</button>
             </div>
           </div>
@@ -872,6 +873,13 @@ function log(m){
   while(logEl.childElementCount>300)logEl.firstChild.remove();
   logEl.scrollTop=logEl.scrollHeight;
 }
+function logHtml(html){
+  const d=document.createElement('div');
+  d.innerHTML=`<span class="t">${new Date().toLocaleTimeString('ru-RU')}</span>${html}`;
+  logEl.appendChild(d);
+  while(logEl.childElementCount>300)logEl.firstChild.remove();
+  logEl.scrollTop=logEl.scrollHeight;
+}
 $('#btnClear').onclick=()=>logEl.innerHTML='';
 
 /* ================= worker / rpc ================= */
@@ -894,7 +902,7 @@ worker.onmessage=e=>{
 worker.onerror=e=>log('worker: '+e.message);
 
 /* ============ контракт lkUnlock (RPC registry + legacy aliases) ============ */
-const state={ready:false,buf:null,pem:null,busy:null};
+const state={ready:false,buf:null,pem:null,busy:null,tokenValid:false};
 const rpcRegistry={};
 
 function registerRpc(name, fn){
@@ -1256,7 +1264,7 @@ function loadJwk(){
 
 function sync(){
   // btnPatch is managed exclusively by lkPatchUi (strategy phase), not here.
-  els.sign.disabled=!state.ready||!els.token.value.trim()||!!state.busy;
+  els.sign.disabled=!state.ready||!state.tokenValid||!!state.busy;
   els.importBtn.disabled=!state.ready||!!state.busy;
   els.exportBtn.disabled=!state.ready||!!state.busy;
 }
@@ -1285,7 +1293,7 @@ function matchDeviceFromFingerprint(fp, tokenDevice){
 function analyzeToken(){
   if(!state.ready)return;
   const val=els.token.value.trim();
-  if(!val){els.tokenChecklist.style.display='none';els.osWarning.classList.remove('show');return;}
+  if(!val){state.tokenValid=false;els.tokenChecklist.style.display='none';els.osWarning.classList.remove('show');sync();return;}
   els.tokenChecklist.style.display='block';
   // One pass: parse once, update all three rows together (no re-decode).
   window.lkUnlock.parseToken(val).then(r=>{
@@ -1301,7 +1309,8 @@ function analyzeToken(){
       setCheck('#tokenPrefix',false,'—');
       setCheck('#tokenDevice',false,'—');
     }
-    els.sign.disabled=!okB;
+    state.tokenValid=okB;
+    sync();
     // OS detection (MIUI vs HyperOS) + device-name match if fingerprint provided.
     const fp=(els.fingerprint&&els.fingerprint.value||'').trim();
     if(fp&&okB){
@@ -1321,7 +1330,8 @@ function analyzeToken(){
     setCheck('#tokenBase64',false,t('status.parseError'));
     setCheck('#tokenPrefix',false,'');
     setCheck('#tokenDevice',false,'');
-    els.sign.disabled=true;
+    state.tokenValid=false;
+    sync();
   });
 }
 els.token.addEventListener('input',()=>{clearTimeout(tokenTimer);tokenTimer=setTimeout(analyzeToken,300);});
@@ -1376,7 +1386,8 @@ async function onFile(f){
   log(t('status.fileSelected',{name}));
   lkPatchUi.onFileChange(f);
   runDiag(mySeq);
-  lkPatchUi.runDiagPatch(buf);
+  // Keep state.buf usable: runDiagPatch transfers its buffer to the worker.
+  lkPatchUi.runDiagPatch(buf.slice(0));
   sync();
 }
 
@@ -1411,14 +1422,17 @@ function clearFile(){
   fileSeq++;  // invalidate in-flight
   setDropState('empty');
   els.lkfile.value='';
+  lkPatchUi.onFileChange(null);
   sync();
 }
-els.btnRemove.onclick = clearFile;
+els.btnRemove.onclick = e=>{e.preventDefault();e.stopPropagation();clearFile();};
+els.btnReplace.onclick = e=>{e.preventDefault();e.stopPropagation();els.lkfile.click();};
 
 $('#lkfile').addEventListener('change',e=>onFile(e.target.files[0]));
 ['dragenter','dragover'].forEach(t=>els.drop.addEventListener(t,e=>{e.preventDefault();els.drop.classList.add('drag');}));
 ['dragleave','drop'].forEach(t=>els.drop.addEventListener(t,e=>{e.preventDefault();els.drop.classList.remove('drag');}));
 els.drop.addEventListener('drop',e=>{e.preventDefault();onFile(e.dataTransfer.files[0]);});
+els.drop.addEventListener('click',e=>{if(!e.target.closest('button'))els.lkfile.click();});
 
 /* ================= key import / export ================= */
 els.importBtn.onclick=()=>els.pemFile.click();
@@ -1507,6 +1521,7 @@ function onReady(source){
   setKeyStatus(source);
   log(t('status.coreReady',{key:source}));
   finishSplash();sync();
+  if(els.token.value.trim())analyzeToken(); // token pasted while worker was booting: analyzeToken bailed on !state.ready
   showKeyFingerprint();
 }
 
@@ -2293,7 +2308,7 @@ async function connectWs(url) {
   // Wire the module's packet logger to the on-page log + toggle.
   setPacketLogger((dir, cmd, a0, arg1, len) => {
     if (!pktLogOn) return;
-    log(`<span class="pkt-${dir}">[${dir}]</span> ${cmd} a0=${a0} a1=${arg1} len=${len}`);
+    logHtml(`<span class="pkt-${dir}">[${dir}]</span> ${cmd} a0=${a0} a1=${arg1} len=${len}`);
   });
 
   // ── WebUSB connector (I/O matches app.webadb.com / ya-webadb) ─────────
@@ -2386,10 +2401,11 @@ async function connectWs(url) {
     $('#btnPkts').classList.toggle('active',pktLogOn);
     log(pktLogOn?t('log.pktsOn'):t('log.pktsOff'));
   };
+  $('#btnPkts').classList.toggle('active',pktLogOn);
 
   function setStatus(msg,type='default'){
-    const t=statusEl.querySelector('.status-text');
-    if(t) t.textContent=msg;
+    const span=statusEl.querySelector('.status-text');
+    if(span) span.textContent=msg;
     else statusEl.textContent=msg;
     statusEl.className='device-status '+type;
   }
