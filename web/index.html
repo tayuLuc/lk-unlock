@@ -411,6 +411,14 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
         <input id="wsUrl" type="text" spellcheck="false" placeholder="ws://localhost:8000" style="flex:1;background:rgba(0,0,0,.35);border:1px solid var(--border);border-radius:12px;color:var(--text);font:12px var(--mono);padding:10px 12px" data-i18n-placeholder="webusb.wsPlaceholder">
         <button id="connectWsBtn" class="btn ghost" data-i18n="webusb.connectWs">Подключить по WS</button>
       </div>
+      <div class="webusb-row" style="margin-top:8px">
+        <button id="btnRebootBl" class="btn ghost" style="flex:1" disabled data-i18n="adb.rebootBl">⇥ Перезагрузить в fastboot</button>
+        <button id="btnPkgsExport" class="btn ghost" disabled data-i18n="adb.exportApps">Экспорт списка приложений</button>
+      </div>
+      <div class="webusb-row" style="margin-top:8px">
+        <input id="shellCmd" type="text" spellcheck="false" data-i18n-placeholder="adb.shellPlaceholder" placeholder="getprop ro.product.model" style="flex:1;background:rgba(0,0,0,.35);border:1px solid var(--border);border-radius:12px;color:var(--text);font:12px var(--mono);padding:10px 12px">
+        <button id="btnShellRun" class="btn ghost" disabled data-i18n="adb.run">Выполнить</button>
+      </div>
       <div class="device-info" id="deviceInfo" style="display:none"></div>
       <div class="os-warning" id="osWarning">
         <b id="osWarningTitle" data-i18n="warning.prefix">Предупреждение:</b> <span id="osWarningText"></span>
@@ -433,6 +441,22 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
         <p data-i18n-html="faq.p3"><b>Важно:</b> патч и подпись должны использовать <b>один и тот же</b> <code>private.pem</code>. Если потерять или перепутать ключ — телефон откажет, придётся перепатчивать.</p>
       </details>
     </article>
+  </section>
+
+  <!-- карточка 3: fastboot -->
+  <section class="card" id="fbCard">
+    <div class="c-head"><span class="num">03</span><h2 data-i18n="fb.title">Fastboot</h2><span class="c-tag">bootloader</span></div>
+    <p class="c-desc" data-i18n="fb.desc">Телефон в режиме fastboot (кнопка «Перезагрузить в fastboot» выше или Vol− + Power). Получите токен, подпишите его в карточке выше и разблокируйте загрузчик.</p>
+    <div class="webusb-row">
+      <button id="btnFbConnect" class="btn ghost" style="flex:1" data-i18n="fb.connect">🔌 Подключить fastboot</button>
+      <span id="fbStatus" class="device-status" data-i18n="webusb.notConnected">Не подключено</span>
+    </div>
+    <div class="device-info" id="fbInfo" style="display:none"></div>
+    <div class="row" style="margin-top:12px">
+      <button id="btnFbToken" class="btn primary" disabled style="flex:1" data-i18n="fb.getToken">Получить токен с устройства</button>
+      <button id="btnFbUnlock" class="btn ghost" disabled data-i18n="fb.stageUnlock">Stage signature.bin → oem unlock</button>
+    </div>
+    <div class="hash" id="fbHash"></div>
   </section>
 
   <!-- token visualization: base64 <-> bytes mapping (own block before log) -->
@@ -606,7 +630,28 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
       'lk.report.type.replace_rsa_key': 'Замена RSA', 'lk.report.type.resign_cert2': 'Переподпись cert2',
       'lk.report.type.json_patch': 'JSON патч', 'lk.report.type.spoof_lock': 'Spoof Lock',
       'lk.button.validate': 'Проверить',
-      'file.signTo': 'Подписать → signature.bin'
+      'file.signTo': 'Подписать → signature.bin',
+      'adb.rebootBl': '⇥ Перезагрузить в fastboot',
+      'adb.exportApps': 'Экспорт списка приложений',
+      'adb.run': 'Выполнить',
+      'adb.shellPlaceholder': 'getprop ro.product.model',
+      'adb.rebootSent': 'Команда перезагрузки в bootloader отправлена — телефон появится в fastboot через ~5 сек.',
+      'adb.pkgsSaved': 'Список сторонних приложений сохранён: apps_list.txt ({count} шт.)',
+      'adb.shellDone': 'shell: выполнено, {bytes} байт',
+      'fb.title': 'Fastboot',
+      'fb.desc': 'Телефон в режиме fastboot (кнопка «Перезагрузить в fastboot» выше или Vol− + Power). Получите токен, подпишите его в карточке выше и разблокируйте загрузчик.',
+      'fb.connect': '🔌 Подключить fastboot',
+      'fb.connected': '✓ {product} · unlocked: {unlocked}',
+      'fb.getToken': 'Получить токен с устройства',
+      'fb.stageUnlock': 'Stage signature.bin → oem unlock',
+      'fb.tokenGot': 'Токен получен ({chars} символов) и вставлен в поле выше — проверьте чек-лист и подпишите.',
+      'fb.tokenEmpty': 'Не удалось извлечь токен из ответа устройства.',
+      'fb.staging': 'Отправка signature.bin на устройство…',
+      'fb.unlockSent': 'oem unlock выполнен. Проверяю состояние…',
+      'fb.unlockedYes': 'ЗАБЛОКИРОВАН НЕТ: unlocked = yes. Устройство разблокировано!',
+      'fb.unlockedNo': 'Пока не разблокирован: unlocked = {value}. Переподключитесь и повторите (бывали ложные срабатывания).',
+      'fb.fail': 'Устройство ответило FAIL: {msg}',
+      'fb.noSignature': 'Сначала подпишите токен (кнопка «Подписать» выше) — подпись будет отправлена на устройство.'
     },
 
     en: {
@@ -748,7 +793,28 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
       'lk.report.type.replace_rsa_key': 'Replace RSA', 'lk.report.type.resign_cert2': 'Resign cert2',
       'lk.report.type.json_patch': 'JSON patch', 'lk.report.type.spoof_lock': 'Spoof Lock',
       'lk.button.validate': 'Validate',
-      'file.signTo': 'Sign → signature.bin'
+      'file.signTo': 'Sign → signature.bin',
+      'adb.rebootBl': '⇥ Reboot to fastboot',
+      'adb.exportApps': 'Export app list',
+      'adb.run': 'Run',
+      'adb.shellPlaceholder': 'getprop ro.product.model',
+      'adb.rebootSent': 'Reboot-to-bootloader command sent — the phone shows up in fastboot in ~5 s.',
+      'adb.pkgsSaved': 'Third-party app list saved: apps_list.txt ({count} entries)',
+      'adb.shellDone': 'shell: done, {bytes} bytes',
+      'fb.title': 'Fastboot',
+      'fb.desc': 'Phone in fastboot mode (the “Reboot to fastboot” button above, or Vol− + Power). Fetch the token, sign it in the card above and unlock the bootloader.',
+      'fb.connect': '🔌 Connect fastboot',
+      'fb.connected': '✓ {product} · unlocked: {unlocked}',
+      'fb.getToken': 'Fetch token from device',
+      'fb.stageUnlock': 'Stage signature.bin → oem unlock',
+      'fb.tokenGot': 'Token received ({chars} chars) and placed into the field above — check the checklist and sign it.',
+      'fb.tokenEmpty': 'Failed to extract the token from the device response.',
+      'fb.staging': 'Uploading signature.bin to the device…',
+      'fb.unlockSent': 'oem unlock completed. Verifying state…',
+      'fb.unlockedYes': 'UNLOCKED: unlocked = yes. Device is unlocked!',
+      'fb.unlockedNo': 'Not yet unlocked: unlocked = {value}. Reconnect and retry (false positives have happened).',
+      'fb.fail': 'Device replied FAIL: {msg}',
+      'fb.noSignature': 'Sign the token first (“Sign” button above) — the signature will be uploaded to the device.'
     }
 
   };
@@ -1224,6 +1290,16 @@ const els={
   keyFingerprint:$('#keyFingerprint'),
   keyFingerprintEmoji:$('#keyFingerprintEmoji'),
   keyFingerprintShort:$('#keyFingerprintShort'),
+  btnRebootBl:$('#btnRebootBl'),
+  btnPkgsExport:$('#btnPkgsExport'),
+  shellCmd:$('#shellCmd'),
+  btnShellRun:$('#btnShellRun'),
+  fbConnect:$('#btnFbConnect'),
+  fbStatus:$('#fbStatus'),
+  fbInfo:$('#fbInfo'),
+  fbToken:$('#btnFbToken'),
+  fbUnlock:$('#btnFbUnlock'),
+  fbHash:$('#fbHash'),
 };
 els.keyDot = els.keyStatus.querySelector('.dot');
 
@@ -1466,9 +1542,162 @@ els.patch.onclick=()=>lkPatchUi.startPatchJob();
 els.sign.onclick=()=>busy(els.sign,async()=>{
   log(t('status.signing'));
   const r=await window.lkUnlock.signToken(els.token.value.trim());
+  lastSignature={bytes:new Uint8Array(r.sig),token:els.token.value.trim()};
   saveBlob(r.sig,'signature.bin');
   showHash('#signHash',r.sha256);
   log(t('status.signDone',{hash:r.sha256.slice(0,16)}));
+});
+
+/* ================= fastboot (bootloader mode) ================= */
+const FB_FILTER=[{classCode:255,subclassCode:66,protocolCode:3}];
+let fbClient=null,lastSignature=null;
+function stripFbPad(s){return s.replace(/[\0\s]+$/,'');}
+class FastbootClient{
+  static async connect(){
+    const device=await navigator.usb.requestDevice({filters:FB_FILTER});
+    await device.open();
+    try{
+      await device.selectConfiguration(1);
+      let ifaceNum=-1,outEp=-1,inEp=-1;
+      for(const iface of device.configuration.interfaces)
+        for(const alt of iface.alternates)
+          if(alt.interfaceClass===255&&alt.interfaceSubclass===66&&alt.interfaceProtocol===3){
+            ifaceNum=iface.interfaceNumber;
+            for(const ep of alt.endpoints){
+              if(ep.direction==='out'&&ep.type==='bulk')outEp=ep.endpointNumber;
+              if(ep.direction==='in'&&ep.type==='bulk')inEp=ep.endpointNumber;
+            }
+          }
+      if(ifaceNum<0||outEp<0||inEp<0)throw new Error('fastboot interface not found');
+      await device.claimInterface(ifaceNum);
+      return new FastbootClient(device,outEp,inEp);
+    }catch(e){
+      await device.close().catch(()=>{});
+      throw e;
+    }
+  }
+  constructor(device,outEp,inEp){this.device=device;this.outEp=outEp;this.inEp=inEp;}
+  async #write(data){
+    // WebUSB splits bulk transfers into max-packet-size packets itself.
+    for(let off=0;off<data.length;off+=65536)
+      await this.device.transferOut(this.outEp,data.subarray(off,off+65536));
+  }
+  async exec(cmd,{timeoutMs=30000}={}){
+    await this.#write(new TextEncoder().encode(cmd));
+    return this.#readResponse(timeoutMs);
+  }
+  async download(payload,timeoutMs=30000){
+    const size=payload.length;
+    await this.#write(new TextEncoder().encode('download:'+size.toString(16).padStart(8,'0')));
+    const r=await this.#readResponse(timeoutMs);
+    if(r.status!=='DATA')return r;
+    if(r.size!==size)return{status:'FAIL',text:`DATA size mismatch: echoed ${r.size}, expected ${size}`,info:r.info};
+    await this.#write(payload);
+    return this.#readResponse(timeoutMs);
+  }
+  async #readPacketOnce(leftMs){
+    let tm;
+    try{
+      return await Promise.race([
+        this.device.transferIn(this.inEp,64),
+        new Promise((_,rej)=>{tm=setTimeout(()=>rej(new Error('fastboot timeout')),leftMs);}),
+      ]);
+    }finally{clearTimeout(tm);}
+  }
+  async #readResponse(timeoutMs){
+    const dec=new TextDecoder(),info=[],deadline=Date.now()+timeoutMs;
+    let prevWasFull=false;
+    try{
+      for(;;){
+        const left=deadline-Date.now();
+        if(left<=0)throw new Error('fastboot timeout');
+        const res=await this.#readPacketOnce(left);
+        if(res.status!=='ok')throw new Error('usb transfer failed');
+        const byteLen=res.data?res.data.byteLength:0;
+        if(!byteLen){prevWasFull=false;continue;} /* ZLP */
+        const str=stripFbPad(dec.decode(new Uint8Array(res.data.buffer,res.data.byteOffset,byteLen)));
+        const prefix=str.slice(0,4),rest=str.slice(4);
+        if(prefix==='INFO'){info.push(rest);prevWasFull=byteLen===64;continue;}
+        if(prefix==='OKAY')return{status:'OKAY',text:rest,info};
+        if(prefix==='FAIL')return{status:'FAIL',text:rest,info};
+        if(prefix==='DATA')return{status:'DATA',size:parseInt(rest,16),info};
+        // No known prefix: continuation of a packet split by USB (non-spec but seen in the wild)
+        if(prevWasFull){info.push(str);prevWasFull=byteLen===64;continue;}
+        throw new Error('unexpected fastboot response: '+str.slice(0,32));
+      }
+    }catch(e){
+      this.close();
+      throw e;
+    }
+  }
+  close(){try{this.device.close().catch(()=>{});}catch(_){/* already gone */}}
+}
+function fbExtractToken(infoLines){
+  // join('') first: one logical "token:" line can be split across USB packets,
+  // and Xiaomi spreads the token over several such lines — concatenate groups.
+  const re=/^\s*(?:\(bootloader\)\s*)?token:\s*(.+)$/i;
+  let token='';
+  for(const line of infoLines.join('').split('\n')){
+    const m=line.match(re);
+    if(m)token+=m[1].trim();
+  }
+  return token;
+}
+function fbSetStatus(msg,type='default'){
+  els.fbStatus.textContent=msg;
+  els.fbStatus.className='device-status '+type;
+}
+async function fbGetVar(name){const r=await fbClient.exec('getvar:'+name);return r.status==='OKAY'?stripFbPad(r.text):'?';}
+
+els.fbConnect.onclick=()=>busy(els.fbConnect,async()=>{
+  if(fbClient){fbClient.close();fbClient=null;}
+  fbClient=await FastbootClient.connect();
+  const product=await fbGetVar('product'),unlocked=await fbGetVar('unlocked'),slot=await fbGetVar('current-slot');
+  els.fbInfo.textContent=`product: ${product} · unlocked: ${unlocked} · slot: ${slot}`;
+  els.fbInfo.style.display='block';
+  fbSetStatus(t('fb.connected',{product,unlocked}),'connected');
+  els.fbToken.disabled=false;
+  els.fbUnlock.disabled=!state.ready;
+});
+els.fbToken.onclick=()=>busy(els.fbToken,async()=>{
+  const r=await fbClient.exec('oem get_token',{timeoutMs:60000});
+  if(r.status!=='OKAY')throw new Error(t('fb.fail',{msg:r.text||'(no text)'}));
+  const token=fbExtractToken(r.info);
+  if(!token){log(t('fb.tokenEmpty'));return;}
+  els.token.value=token;
+  analyzeToken();
+  log(t('fb.tokenGot',{chars:token.length}));
+});
+els.fbUnlock.onclick=()=>busy(els.fbUnlock,async()=>{
+  const tokenText=els.token.value.trim();
+  // A signature is only valid for the exact token it was produced from.
+  let sig=lastSignature&&lastSignature.token===tokenText?lastSignature.bytes:null;
+  if(!sig){
+    // Nothing signed yet (or the token changed since): sign the current valid token on the spot.
+    if(!state.tokenValid)throw new Error(t('fb.noSignature'));
+    const r=await window.lkUnlock.signToken(tokenText);
+    sig=new Uint8Array(r.sig);
+    lastSignature={bytes:sig,token:tokenText};
+    saveBlob(r.sig,'signature.bin');
+    showHash('#signHash',r.sha256);
+  }
+  log(t('fb.staging'));
+  const st=await fbClient.download(sig,60000);
+  if(st.status!=='OKAY')throw new Error(t('fb.fail',{msg:st.text||'(no text)'}));
+  const un=await fbClient.exec('oem unlock',{timeoutMs:60000});
+  if(un.status!=='OKAY')throw new Error(t('fb.fail',{msg:un.text||'(no text)'}));
+  log(t('fb.unlockSent'));
+  await new Promise(res=>setTimeout(res,1500));
+  const verdict=await fbGetVar('unlocked').catch(()=> '?');
+  if(verdict==='yes'){
+    log(t('fb.unlockedYes'));
+    els.fbUnlock.disabled=true;
+  }else{
+    log(t('fb.unlockedNo',{value:verdict}));
+  }
+});
+if(navigator.usb)navigator.usb.addEventListener('disconnect',e=>{
+  if(fbClient&&e.device===fbClient.device){fbClient=null;fbSetStatus(t('webusb.deviceDisconnected'),'error');els.fbToken.disabled=true;els.fbUnlock.disabled=true;}
 });
 
 /* ================= сплэш ================= */
@@ -2469,6 +2698,7 @@ async function connectWs(url) {
       infoEl.style.display='block';
       // Re-run token analysis with the new fingerprint.
       if(typeof analyzeToken==='function') analyzeToken();
+      els.btnRebootBl.disabled=els.btnPkgsExport.disabled=els.btnShellRun.disabled=false;
     }catch(e){
       console.error('WebUSB read error:',e);
       setStatus(t('webusb.readError',{error:e.message||e}),'error');
@@ -2479,11 +2709,40 @@ async function connectWs(url) {
     try{ adb&&await adb.close(); }catch(e){}
     try{ usbDevice&&await usbDevice.close(); }catch(_){}
     adb=null; usbDevice=null; wsTransport=null;
+    els.btnRebootBl.disabled=els.btnPkgsExport.disabled=els.btnShellRun.disabled=true;
     if(!keepClean) setStatus(t('webusb.disconnected'),'default');
   }
+  async function adbCapture(cmd){
+    const s=await adb.createSocket(cmd);
+    const dec=new TextDecoder();
+    try{
+      let out='';
+      for(;;){const c=await s.read();if(c===null)break;out+=dec.decode(c,{stream:true});}
+      return out+dec.decode();
+    }finally{await s.close().catch(()=>{});}
+  }
+  els.btnRebootBl.onclick=()=>busy(els.btnRebootBl,async()=>{
+    const s=await adb.createSocket('shell:reboot bootloader');
+    try{
+      let c;while((c=await s.read())!==null){/* adbd dies mid-reboot */}
+    }finally{await s.close().catch(()=>{});}
+    log(t('adb.rebootSent'));
+  });
+  els.btnPkgsExport.onclick=()=>busy(els.btnPkgsExport,async()=>{
+    const out=await adbCapture('shell:pm list packages -3');
+    saveBlob(out,'apps_list.txt');
+    log(t('adb.pkgsSaved',{count:out.split('\n').filter(l=>l.trim()).length}));
+  });
+  els.btnShellRun.onclick=()=>busy(els.btnShellRun,async()=>{
+    const cmd=els.shellCmd.value.trim();
+    if(!cmd)return;
+    const out=await adbCapture('shell:'+cmd);
+    log(t('adb.shellDone',{bytes:out.length}));
+    log(out.length>4000?out.slice(0,4000)+'…':out||'(empty)');
+  });
   // Physical USB unplug.
   if(navigator.usb) navigator.usb.addEventListener('disconnect',async(e)=>{
-    if(usbDevice && e.device!==usbDevice) return;
+    if(!usbDevice || e.device!==usbDevice) return;
     if(!(adb||usbDevice)) return;
     await disconnectDevice();
     setStatus(t('webusb.deviceDisconnected'),'error');
