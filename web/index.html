@@ -456,6 +456,11 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
       <button id="btnFbToken" class="btn primary" disabled style="flex:1" data-i18n="fb.getToken">Получить токен с устройства</button>
       <button id="btnFbUnlock" class="btn ghost" disabled data-i18n="fb.stageUnlock">Stage signature.bin → oem unlock</button>
     </div>
+    <div class="webusb-row" style="margin-top:8px">
+      <span style="font:12px var(--mono);color:var(--muted);align-self:center">getvar:</span>
+      <input id="fbVar" type="text" spellcheck="false" data-i18n-placeholder="fb.varPlaceholder" placeholder="unlock_ability" style="flex:1;background:rgba(0,0,0,.35);border:1px solid var(--border);border-radius:12px;color:var(--text);font:12px var(--mono);padding:10px 12px">
+      <button id="btnFbGetvar" class="btn ghost" disabled data-i18n="fb.runGetvar">Спросить</button>
+    </div>
     <div class="hash" id="fbHash"></div>
   </section>
 
@@ -644,6 +649,9 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
       'fb.connected': '✓ {product} · unlocked: {unlocked}',
       'fb.getToken': 'Получить токен с устройства',
       'fb.stageUnlock': 'Stage signature.bin → oem unlock',
+      'fb.varPlaceholder': 'unlock_ability',
+      'fb.runGetvar': 'Спросить',
+      'fb.varResult': 'getvar {name} = {value}',
       'fb.tokenGot': 'Токен получен ({chars} символов) и вставлен в поле выше — проверьте чек-лист и подпишите.',
       'fb.tokenEmpty': 'Не удалось извлечь токен из ответа устройства.',
       'fb.staging': 'Отправка signature.bin на устройство…',
@@ -807,6 +815,9 @@ pre#log::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:
       'fb.connected': '✓ {product} · unlocked: {unlocked}',
       'fb.getToken': 'Fetch token from device',
       'fb.stageUnlock': 'Stage signature.bin → oem unlock',
+      'fb.varPlaceholder': 'unlock_ability',
+      'fb.runGetvar': 'Ask',
+      'fb.varResult': 'getvar {name} = {value}',
       'fb.tokenGot': 'Token received ({chars} chars) and placed into the field above — check the checklist and sign it.',
       'fb.tokenEmpty': 'Failed to extract the token from the device response.',
       'fb.staging': 'Uploading signature.bin to the device…',
@@ -1299,6 +1310,8 @@ const els={
   fbInfo:$('#fbInfo'),
   fbToken:$('#btnFbToken'),
   fbUnlock:$('#btnFbUnlock'),
+  fbVar:$('#fbVar'),
+  btnFbGetvar:$('#btnFbGetvar'),
   fbHash:$('#fbHash'),
 };
 els.keyDot = els.keyStatus.querySelector('.dot');
@@ -1657,7 +1670,15 @@ els.fbConnect.onclick=()=>busy(els.fbConnect,async()=>{
   els.fbInfo.style.display='block';
   fbSetStatus(t('fb.connected',{product,unlocked}),'connected');
   els.fbToken.disabled=false;
+  els.btnFbGetvar.disabled=false;
   els.fbUnlock.disabled=!state.ready;
+});
+els.btnFbGetvar.onclick=()=>busy(els.btnFbGetvar,async()=>{
+  const name=els.fbVar.value.trim();
+  if(!name)return;
+  const r=await fbClient.exec('getvar:'+name);
+  if(r.status!=='OKAY')throw new Error(t('fb.fail',{msg:r.text||'(no text)'}));
+  log(t('fb.varResult',{name,value:stripFbPad(r.text)||'(empty)'}));
 });
 els.fbToken.onclick=()=>busy(els.fbToken,async()=>{
   const r=await fbClient.exec('oem get_token',{timeoutMs:60000});
@@ -1697,7 +1718,7 @@ els.fbUnlock.onclick=()=>busy(els.fbUnlock,async()=>{
   }
 });
 if(navigator.usb)navigator.usb.addEventListener('disconnect',e=>{
-  if(fbClient&&e.device===fbClient.device){fbClient=null;fbSetStatus(t('webusb.deviceDisconnected'),'error');els.fbToken.disabled=true;els.fbUnlock.disabled=true;}
+  if(fbClient&&e.device===fbClient.device){fbClient=null;fbSetStatus(t('webusb.deviceDisconnected'),'error');els.fbToken.disabled=true;els.fbUnlock.disabled=true;els.btnFbGetvar.disabled=true;}
 });
 
 /* ================= сплэш ================= */
